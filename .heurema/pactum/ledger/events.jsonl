@@ -57,3 +57,10 @@
 {"type":"review_finding_added","timestamp":"2026-06-23T21:58:06.390521Z","run_id":"run_20260623_213058"}
 {"type":"review_loop_finished","timestamp":"2026-06-23T21:58:06.434474Z","run_id":"run_20260623_213058"}
 {"type":"review_approved","timestamp":"2026-06-23T21:58:53.774198Z","run_id":"run_20260623_213058"}
+{"type":"run_created","timestamp":"2026-06-23T22:00:44.077124Z","run_id":"run_20260623_220044"}
+{"type":"contract_draft_created","timestamp":"2026-06-23T22:00:44.077124Z","run_id":"run_20260623_220044"}
+{"type":"contract_drafter_attempt_started","timestamp":"2026-06-23T22:00:44.088346Z","run_id":"run_20260623_220044"}
+{"type":"contract_drafter_attempt_finished","timestamp":"2026-06-23T22:03:31.15382Z","run_id":"run_20260623_220044"}
+{"type":"contract_draft_proposed","timestamp":"2026-06-23T22:00:44.088346Z","run_id":"run_20260623_220044"}
+{"type":"contract_revised","timestamp":"2026-06-23T22:03:31.174652Z","run_id":"run_20260623_220044"}
+{"type":"contract_draft_accepted","timestamp":"2026-06-23T22:03:31.175555Z","run_id":"run_20260623_220044"}

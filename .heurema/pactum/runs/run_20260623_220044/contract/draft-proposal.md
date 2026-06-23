@@ -1,0 +1,45 @@
+# Contract Draft Proposal
+
+## Status
+- Run id: run_20260623_220044
+- Status: accepted
+- Source: drafter_attempt
+- Drafter attempt: drafter_attempt_001
+- Drafter: codex
+- Accepted by: manual
+- Accepted at: 2026-06-23T22:03:31Z
+
+## In scope
+- Implement `internal/engine/loop` with `Limits{Max,Settle,Patience}`, `Step`, `RoundResult`, `Outcome`, and `Run` for settled, stalemate, and max outcomes.
+- Implement `internal/engine/transport` interfaces for `Transport`, `Session`, `Spec`, and `Result`, plus deterministic error classification.
+- Implement a mock transport backend for tests whose sessions return pre-scripted results and errors.
+- Implement `internal/engine/orchestrate` with `Participant`, `Turn`, `Transcript` including `DeltaFor`, a round-robin scheduler, pluggable `PromptBuilder` and `Verdict` seams, `Config`, and `Run`.
+- Add focused unit tests for loop behavior, mock transport behavior, transcript delta behavior, round-robin orchestration, and outcome propagation.
+
+## Out of scope
+- Debate-layer prompt policy, self-signal schema, signal parser, quorum/all_done verdict policy, or nudge behavior.
+- Real ACP, exec, API, network, subprocess, or model-backed transports.
+- CLI behavior, persona parsing, `.heurema/debate` discovery, config loading, synthesizer selection, or repository rename work.
+- Recovery, retry, degraded participant handling, live stderr streaming, telemetry, or production transport lifecycle policy.
+
+## Acceptance criteria
+- `loop.Run` stops with reason `settled` after `Settle` consecutive clean rounds, `stalemate` after `Patience` consecutive no-progress rounds, and `max` after `Max` rounds, returning the completed round count and last round result.
+- `loop` tests cover settled, stalemate, max, step error propagation, and context cancellation or interruption behavior.
+- `transport` exposes the requested interfaces and error classification, and the mock backend deterministically returns scripted responses, records sent prompts, and closes sessions without external calls.
+- `orchestrate.Run` opens or uses configured participant sessions, sends prompts in round-robin order, appends every response to the transcript, invokes the configured verdict after each round, and returns transcript plus loop outcome.
+- `Transcript.DeltaFor` excludes the requesting participant's own turns and exposes the new turns from other participants needed for delta prompts; tests cover same-round and next-round visibility.
+- Multi-participant orchestration tests using only the mock backend assert turn order, transcript accumulation, prompt delta visibility, and settled, stalemate, and max outcomes.
+- `internal/engine/...` remains policy-free and does not import `internal/debate`, `cmd/debate`, persona/config code, synthesizer code, or real backend implementations.
+
+## Validation commands
+- test -z "$(gofmt -l internal cmd)"
+- go test -count=1 ./internal/engine/...
+- go test -count=1 ./...
+- go vet ./...
+- sh -c 'deps=$(go list -deps ./internal/engine/...) && ! printf "%s\n" "$deps" | grep -E "^github.com/heurema/debate/(internal/debate|cmd/debate)"'
+
+## Assumptions
+- Current repository files are the source of truth where they differ from the stale Pactum map; `go.mod`, `Makefile`, and the existing `internal/engine` package layout should be extended in place.
+- The mock backend may live in a transport subpackage such as `internal/engine/transport/mock` while the core transport interfaces remain in `internal/engine/transport`.
+- No clarification answers define invalid limits, exhausted mock scripts, or exact transcript cursor semantics, so the implementation should choose deterministic behavior and document it with tests.
+

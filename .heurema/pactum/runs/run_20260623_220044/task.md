@@ -1,0 +1,5 @@
+# Task
+
+Slice 1: implement the policy-free engine on a mock backend. Package internal/engine/loop: a streak loop Run(ctx, Limits{Max,Settle,Patience}, Step) -> Outcome that drives rounds and decides settled/stalemate/max via consecutive clean/no-progress streaks. Package internal/engine/transport: Transport/Session/Spec/Result interfaces (Open->Send->Close) plus error classification, and a mock backend whose Session returns pre-scripted responses for tests. Package internal/engine/orchestrate: Participant, Turn, Transcript (with DeltaFor), a RoundRobin Scheduler, pluggable PromptBuilder and Verdict seams, a Config, and Run that wires loop+transport+transcript into round-robin rounds. Provide unit tests that drive a multi-participant debate on the mock backend with a trivial verdict, asserting turn order, transcript accumulation, delta visibility, and settled/stalemate/max outcomes. Out of scope: debate policy / signal schema, real acp/exec/api backends, CLI, personas, config discovery, synthesizer.
+
+Generated: 2026-06-23T22:00:44Z
