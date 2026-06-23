@@ -1,0 +1,22 @@
+{
+  "schema": "pactum.run.v1alpha1",
+  "run_id": "run_20260623_213058",
+  "status": "contract_approved",
+  "task": "Slice 0: bootstrap the debate Go project skeleton — go.mod (module github.com/heurema/debate), package layout (internal/engine/{loop,transport,orchestrate}, internal/debate, cmd/debate), Makefile, and a 'debate version' command. No engine or debate logic yet.",
+  "created_at": "2026-06-23T21:30:58.249825Z",
+  "updated_at": "2026-06-23T21:50:17.473498Z",
+  "repo_root": ".",
+  "workspace": ".heurema/pactum",
+  "map_run_id": "map_20260623_212315",
+  "artifacts": {
+    "task": "task.md",
+    "repo_context": "context/repo-context.md",
+    "search_results": "context/search-results.json",
+    "executor_context": "context/executor-context.md",
+    "contract_json": "contract/contract.json",
+    "contract_md": "contract/contract.md",
+    "prompt": "contract/prompt.md",
+    "prompt_manifest": "contract/prompt-manifest.json",
+    "approval": "contract/approval.json"
+  }
+}
