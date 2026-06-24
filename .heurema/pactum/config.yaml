@@ -1,11 +1,8 @@
 version: v1alpha1
 agents:
-  - name: sonnet
-    model: claude-sonnet-4-6
+  - name: codex-high
+    model: gpt-5.5
     effort: high
-  - name: opus-xhigh
-    model: claude-opus-4-8
-    effort: xhigh
   - name: codex-xhigh
     model: gpt-5.5
     effort: xhigh
@@ -20,7 +17,7 @@ pipeline:
       patience: 0
       settle: 0
   execute:
-    by: sonnet
+    by: codex-high
   contract_review:
     by: codex-xhigh
     loop:
@@ -28,7 +25,7 @@ pipeline:
       patience: 2
       settle: 1
   code_review:
-    by: opus-xhigh
+    by: codex-xhigh
     loop:
       max: 10
       patience: 2
