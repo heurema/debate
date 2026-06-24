@@ -1,0 +1,12 @@
+{
+  "schema": "pactum.validation_command_result.v1alpha1",
+  "id": "command_006",
+  "command": "git diff --exit-code -- go.mod go.sum",
+  "started_at": "2026-06-24T13:49:22.717837Z",
+  "finished_at": "2026-06-24T13:49:22.732545Z",
+  "duration_ms": 14,
+  "exit_code": 0,
+  "timed_out": false,
+  "stdout": "gate/validation/command_006/stdout.log",
+  "stderr": "gate/validation/command_006/stderr.log"
+}
