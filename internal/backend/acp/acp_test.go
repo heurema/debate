@@ -7,6 +7,7 @@ import (
 	"os"
 	"sync"
 	"testing"
+	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
 	"github.com/heurema/debate/internal/engine/transport"
@@ -24,12 +25,13 @@ type promptScenario struct {
 // fakeAgent implements acpsdk.Agent for deterministic unit tests.
 // It uses an injectable queue of per-call scenarios.
 type fakeAgent struct {
-	mu             sync.Mutex
-	asc            *acpsdk.AgentSideConnection
-	scenarios      []promptScenario
-	callIdx        int
-	newSessCwds    []string                // Cwd from each NewSession call, in order
-	receivedBlocks [][]acpsdk.ContentBlock // prompt content from each Prompt call, in order
+	mu              sync.Mutex
+	asc             *acpsdk.AgentSideConnection
+	scenarios       []promptScenario
+	callIdx         int
+	newSessCwds     []string                // Cwd from each NewSession call, in order
+	receivedBlocks  [][]acpsdk.ContentBlock // prompt content from each Prompt call, in order
+	newSessionDelay time.Duration
 }
 
 func (f *fakeAgent) setScenarios(ss ...promptScenario) {
@@ -65,7 +67,14 @@ func (f *fakeAgent) SetSessionMode(_ context.Context, _ acpsdk.SetSessionModeReq
 	return acpsdk.SetSessionModeResponse{}, nil
 }
 
-func (f *fakeAgent) NewSession(_ context.Context, r acpsdk.NewSessionRequest) (acpsdk.NewSessionResponse, error) {
+func (f *fakeAgent) NewSession(ctx context.Context, r acpsdk.NewSessionRequest) (acpsdk.NewSessionResponse, error) {
+	if f.newSessionDelay > 0 {
+		select {
+		case <-time.After(f.newSessionDelay):
+		case <-ctx.Done():
+			return acpsdk.NewSessionResponse{}, ctx.Err()
+		}
+	}
 	f.mu.Lock()
 	f.newSessCwds = append(f.newSessCwds, r.Cwd)
 	f.mu.Unlock()
@@ -88,6 +97,12 @@ func (f *fakeAgent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.
 
 	if sc.err != nil {
 		return acpsdk.PromptResponse{}, sc.err
+	}
+	if len(sc.chunks) == 0 && sc.stop == "" {
+		select {
+		case <-ctx.Done():
+			return acpsdk.PromptResponse{}, ctx.Err()
+		}
 	}
 	for _, chunk := range sc.chunks {
 		_ = asc.SessionUpdate(ctx, acpsdk.SessionNotification{
@@ -175,6 +190,15 @@ func openSession(t *testing.T, tr transport.Transport, spec transport.Spec) tran
 
 // noEnv always returns "".
 func noEnv(_ string) string { return "" }
+
+func envWith(k, v string) func(string) string {
+	return func(got string) string {
+		if got == k {
+			return v
+		}
+		return ""
+	}
+}
 
 // --- tests ---
 
@@ -293,6 +317,23 @@ func TestOpen_Handshake(t *testing.T) {
 	}
 }
 
+func TestOpen_NewSessionTimeout(t *testing.T) {
+	agent := &fakeAgent{newSessionDelay: 50 * time.Millisecond}
+	run, state := newFakeRunner(t, agent)
+	tr, _ := New(BackendClaude, envWith(EnvOpenTimeout, "1ms"), run)
+
+	_, err := tr.Open(context.Background(), transport.Spec{ID: "p1", Model: "m"})
+	if err == nil {
+		t.Fatal("want timeout error")
+	}
+	if cls := transport.Classify(err); cls.Kind != "idle_timeout" {
+		t.Fatalf("Classify = %+v, err=%v; want idle_timeout", cls, err)
+	}
+	if state.killCount == 0 {
+		t.Fatal("want spawned ACP process killed on open timeout")
+	}
+}
+
 func TestSend_EndTurn(t *testing.T) {
 	agent := &fakeAgent{}
 	agent.setScenarios(promptScenario{
@@ -309,6 +350,31 @@ func TestSend_EndTurn(t *testing.T) {
 	}
 	if result.Content != "hello world" {
 		t.Errorf("content = %q, want %q", result.Content, "hello world")
+	}
+}
+
+func TestSend_PromptTimeout(t *testing.T) {
+	agent := &fakeAgent{}
+	agent.setScenarios(
+		promptScenario{}, // blocks until context deadline
+		promptScenario{}, // retry after recovery also blocks
+	)
+	run, state := newFakeRunner(t, agent)
+	tr, _ := New(BackendClaude, envWith(EnvSendTimeout, "1ms"), run)
+	sess := openSession(t, tr, transport.Spec{ID: "p1", Model: "m"})
+
+	_, err := sess.Send(context.Background(), "ping")
+	if err == nil {
+		t.Fatal("want timeout error")
+	}
+	if cls := transport.Classify(err); cls.Kind != "idle_timeout" {
+		t.Fatalf("Classify = %+v, err=%v; want idle_timeout", cls, err)
+	}
+	if len(state.spawns) != 1 {
+		t.Fatalf("timeout must not retry; got %d spawns", len(state.spawns))
+	}
+	if state.killCount == 0 {
+		t.Fatal("want timed-out ACP session killed")
 	}
 }
 

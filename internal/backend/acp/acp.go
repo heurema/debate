@@ -8,9 +8,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
 	"github.com/heurema/debate/internal/engine/transport"
@@ -26,11 +28,15 @@ const (
 const (
 	EnvClaudePackage = "DEBATE_CLAUDE_AGENT_ACP_PACKAGE"
 	EnvCodexPackage  = "DEBATE_CODEX_ACP_PACKAGE"
+	EnvOpenTimeout   = "DEBATE_ACP_OPEN_TIMEOUT"
+	EnvSendTimeout   = "DEBATE_ACP_SEND_TIMEOUT"
 )
 
 const (
 	defaultClaudePackage = "@agentclientprotocol/claude-agent-acp@latest"
 	defaultCodexPackage  = "@heurema/codex-acp@latest"
+	defaultOpenTimeout   = 45 * time.Second
+	defaultSendTimeout   = 5 * time.Minute
 )
 
 // ProcessRunner starts a subprocess and returns (stdin, stdout, kill, err).
@@ -86,17 +92,20 @@ func (t *acpTransport) openAt(ctx context.Context, spec transport.Spec, cwd stri
 		return nil, fmt.Errorf("acp: spawn %q: %w", t.backendID, transport.ErrClientError)
 	}
 
+	openCtx, cancel := withOptionalTimeout(ctx, timeoutFromEnv(t.getEnv, EnvOpenTimeout, defaultOpenTimeout))
+	defer cancel()
+
 	cl := &clientImpl{}
 	conn := acpsdk.NewClientSideConnection(cl, stdinW, stdoutR)
 
-	if _, err := conn.Initialize(ctx, acpsdk.InitializeRequest{
+	if _, err := conn.Initialize(openCtx, acpsdk.InitializeRequest{
 		ProtocolVersion: acpsdk.ProtocolVersionNumber,
 	}); err != nil {
 		_ = kill()
 		return nil, fmt.Errorf("acp: initialize %q: %w", t.backendID, classifyConnErr(err))
 	}
 
-	sessResp, err := conn.NewSession(ctx, acpsdk.NewSessionRequest{
+	sessResp, err := conn.NewSession(openCtx, acpsdk.NewSessionRequest{
 		Cwd:        cwd,
 		McpServers: []acpsdk.McpServer{},
 	})
@@ -183,6 +192,10 @@ func (s *acpSession) Send(ctx context.Context, prompt string) (transport.Result,
 	}
 
 	cls := transport.Classify(err)
+	if cls.Kind == "idle_timeout" || cls.Kind == "deadline" {
+		s.closeInternal()
+		return transport.Result{}, err
+	}
 	if !cls.Retryable {
 		return transport.Result{}, err
 	}
@@ -206,6 +219,9 @@ func (s *acpSession) Send(ctx context.Context, prompt string) (transport.Result,
 func (s *acpSession) sendOnce(ctx context.Context, prompt string) (transport.Result, error) {
 	s.cl.reset()
 
+	sendCtx, cancel := withOptionalTimeout(ctx, timeoutFromEnv(s.tr.getEnv, EnvSendTimeout, defaultSendTimeout))
+	defer cancel()
+
 	s.mu.Lock()
 	systemSent := s.systemSent
 	s.mu.Unlock()
@@ -217,7 +233,7 @@ func (s *acpSession) sendOnce(ctx context.Context, prompt string) (transport.Res
 		content = []acpsdk.ContentBlock{acpsdk.TextBlock(s.spec.System), acpsdk.TextBlock(prompt)}
 	}
 
-	resp, err := s.conn.Prompt(ctx, acpsdk.PromptRequest{
+	resp, err := s.conn.Prompt(sendCtx, acpsdk.PromptRequest{
 		SessionId: s.sessionID,
 		Prompt:    content,
 	})
@@ -377,17 +393,30 @@ func classifyConnErr(err error) error {
 	if err == nil {
 		return nil
 	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("%w: %s", transport.ErrIdleTimeout, err.Error())
+	}
+	if errors.Is(err, context.Canceled) {
+		return fmt.Errorf("%w: %s", transport.ErrCanceled, err.Error())
+	}
 	var reqErr *acpsdk.RequestError
 	if errors.As(err, &reqErr) {
+		reqMsg := reqErr.Error()
+		if errors.Is(reqErr, context.DeadlineExceeded) || strings.Contains(reqMsg, "context deadline exceeded") {
+			return fmt.Errorf("%w: %s", transport.ErrIdleTimeout, reqMsg)
+		}
+		if errors.Is(reqErr, context.Canceled) || strings.Contains(reqMsg, "context canceled") {
+			return fmt.Errorf("%w: %s", transport.ErrCanceled, reqMsg)
+		}
 		switch reqErr.Code {
 		case -32603: // InternalError — wraps dropped connection and peer disconnect
-			return fmt.Errorf("%w: %s", transport.ErrTransportDrop, reqErr.Error())
+			return fmt.Errorf("%w: %s", transport.ErrTransportDrop, reqMsg)
 		case -32000: // AuthRequired
-			return fmt.Errorf("%w: %s", transport.ErrAuth, reqErr.Error())
+			return fmt.Errorf("%w: %s", transport.ErrAuth, reqMsg)
 		case -32800: // RequestCancelled
-			return fmt.Errorf("%w: %s", transport.ErrCanceled, reqErr.Error())
+			return fmt.Errorf("%w: %s", transport.ErrCanceled, reqMsg)
 		default:
-			return fmt.Errorf("%w: %s", transport.ErrClientError, reqErr.Error())
+			return fmt.Errorf("%w: %s", transport.ErrClientError, reqMsg)
 		}
 	}
 	// IO-level errors that escape the SDK wrapping.
@@ -395,10 +424,41 @@ func classifyConnErr(err error) error {
 		return fmt.Errorf("%w: %s", transport.ErrTransportDrop, err.Error())
 	}
 	s := err.Error()
+	if strings.Contains(s, "context deadline exceeded") {
+		return fmt.Errorf("%w: %s", transport.ErrIdleTimeout, s)
+	}
+	if strings.Contains(s, "context canceled") {
+		return fmt.Errorf("%w: %s", transport.ErrCanceled, s)
+	}
 	if strings.Contains(s, "broken pipe") || strings.Contains(s, "connection reset") {
 		return fmt.Errorf("%w: %s", transport.ErrTransportDrop, s)
 	}
 	return fmt.Errorf("%w: %s", transport.ErrClientError, s)
+}
+
+func timeoutFromEnv(getEnv func(string) string, key string, def time.Duration) time.Duration {
+	raw := strings.TrimSpace(getEnv(key))
+	if raw == "" {
+		return def
+	}
+	switch strings.ToLower(raw) {
+	case "0", "off", "none", "disabled":
+		return 0
+	}
+	if d, err := time.ParseDuration(raw); err == nil && d > 0 {
+		return d
+	}
+	if secs, err := strconv.Atoi(raw); err == nil && secs > 0 {
+		return time.Duration(secs) * time.Second
+	}
+	return def
+}
+
+func withOptionalTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
 }
 
 // stopReasonErr maps a non-end_turn stop reason to a transport sentinel error.
