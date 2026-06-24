@@ -1,0 +1,5 @@
+# Task
+
+Slice 7: add debate init and debate new scaffolding subcommands to cmd/debate, using the standard library only, without changing internal/engine, internal/debate, or internal/backend. debate init scaffolds a .heurema/debate workspace under the current directory with two starter debater personas (proposer, skeptic) and a context.md template, never overwriting existing files; the scaffolded workspace loads via config.Load with the two-debater panel and the built-in default synthesizer. debate new <name> creates a new persona file under .heurema/debate/personas from a template with frontmatter (role defaulting to debater, overridable via --role debater|synthesizer; concrete model and effort defaults; optional backend) and a placeholder body, refusing to overwrite an existing persona. Deterministic tests use temporary directories to assert init creates a config.Load-able workspace, re-running init does not overwrite, new creates a persona.ParseFile-able file, and new refuses to overwrite. Out of scope: backends, the run and synthesizer path, and any internal/engine, internal/debate, or internal/backend source change.
+
+Generated: 2026-06-24T13:24:40Z

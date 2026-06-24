@@ -1,0 +1,44 @@
+{
+  "schema": "pactum.contract_draft_proposal.v1alpha1",
+  "run_id": "run_20260624_132440",
+  "status": "accepted",
+  "created_at": "2026-06-24T13:24:48Z",
+  "source": "drafter_attempt",
+  "drafter_attempt_id": "drafter_attempt_001",
+  "drafter": "codex",
+  "in_scope": [
+    "Add `debate init` handling in `cmd/debate` that creates `.heurema/debate`, `.heurema/debate/personas`, `context.md`, `config.yml`, and starter `proposer.md` and `skeptic.md` debater persona files.",
+    "Add `debate new \u003cname\u003e` handling in `cmd/debate` that creates `.heurema/debate/personas/\u003cname\u003e.md` from a parseable persona template.",
+    "Support `debate new \u003cname\u003e --role debater|synthesizer`, defaulting to `debater` when `--role` is omitted.",
+    "Add deterministic Go tests under `cmd/debate` using temporary directories for init/new scaffold behavior."
+  ],
+  "out_of_scope": [
+    "Changing source under `internal/engine`, `internal/debate`, or `internal/backend`.",
+    "Changing debate run behavior, synthesizer execution behavior, backend resolution, or transport implementations.",
+    "Adding new third-party module dependencies or modifying `go.mod` or `go.sum`."
+  ],
+  "acceptance": [
+    "`debate init` creates a workspace in the current working directory that `config.Load(root, nil, \"\")` loads successfully with exactly `proposer` and `skeptic` in the debater panel and the built-in default synthesizer.",
+    "`debate init` creates non-empty, parseable `proposer.md` and `skeptic.md` files whose roles are `debater`, and creates a non-empty `context.md` template.",
+    "Re-running `debate init` in an already scaffolded directory succeeds or reports the existing workspace without overwriting existing `config.yml`, `context.md`, `proposer.md`, or `skeptic.md` contents.",
+    "`debate new \u003cname\u003e` creates `.heurema/debate/personas/\u003cname\u003e.md` with YAML frontmatter accepted by `persona.ParseFile`, including concrete `model` and `effort` values and a non-empty placeholder body.",
+    "`debate new \u003cname\u003e` defaults the generated persona role to `debater`; `--role synthesizer` generates a parseable synthesizer persona; invalid role values are rejected with exit code 1 and no persona file.",
+    "`debate new \u003cname\u003e` refuses to overwrite an existing persona file and leaves the original file contents unchanged.",
+    "Existing `debate version` and normal debate run flag behavior continue to work."
+  ],
+  "validation": [
+    "go test ./cmd/debate",
+    "go test ./internal/debate/config ./internal/debate/persona",
+    "go test ./...",
+    "./scripts/check-gofmt.sh",
+    "go vet ./...",
+    "git diff --exit-code -- go.mod go.sum"
+  ],
+  "assumptions": [
+    "The starter personas may use existing inferable Claude model defaults, such as `claude-sonnet-4-6` or another model already accepted by `persona.InferBackend`, with explicit `effort` values.",
+    "`debate init` should use `config.yml` table entries `proposer` and `skeptic` so the scaffolded panel order is deterministic.",
+    "Persona names for `debate new \u003cname\u003e` are intended to map directly to Markdown basenames under `.heurema/debate/personas`; unsafe path components such as slashes or `..` should be rejected."
+  ],
+  "accepted_at": "2026-06-24T13:26:11Z",
+  "accepted_by": "manual"
+}
