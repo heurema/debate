@@ -1,0 +1,66 @@
+{
+  "schema": "pactum.review_loop.v1alpha1",
+  "run_id": "run_20260624_103219",
+  "started_at": "2026-06-24T11:44:25Z",
+  "finished_at": "2026-06-24T11:57:50Z",
+  "reviewer": "opus-xhigh",
+  "agent": "claude",
+  "max_rounds": 3,
+  "stalemate_patience": 2,
+  "clean_rounds_required": 1,
+  "terminal_reason": "resolved",
+  "rounds": [
+    {
+      "round": 1,
+      "reviewer_attempt_id": "reviewer_attempt_006",
+      "reviewer_attempt_ids": [
+        "reviewer_attempt_006",
+        "reviewer_attempt_010",
+        "reviewer_attempt_008",
+        "reviewer_attempt_009",
+        "reviewer_attempt_007"
+      ],
+      "reviewer_attempts": [
+        {
+          "attempt_id": "reviewer_attempt_006",
+          "reviewer": "opus-xhigh",
+          "lens": "correctness"
+        },
+        {
+          "attempt_id": "reviewer_attempt_010",
+          "reviewer": "opus-xhigh",
+          "lens": "implementation"
+        },
+        {
+          "attempt_id": "reviewer_attempt_008",
+          "reviewer": "opus-xhigh",
+          "lens": "tests"
+        },
+        {
+          "attempt_id": "reviewer_attempt_009",
+          "reviewer": "opus-xhigh",
+          "lens": "over_engineering"
+        },
+        {
+          "attempt_id": "reviewer_attempt_007",
+          "reviewer": "opus-xhigh",
+          "lens": "docs"
+        }
+      ],
+      "proposals_created": 3,
+      "proposals_accepted": 3,
+      "open_findings": 14,
+      "open_blocking_findings": 0,
+      "clean_streak": 0,
+      "unchanged_fingerprint_streak": 0,
+      "working_tree_fingerprint": "8545c15316e9ee789283b1ca1242d68867468b1ed07ac21f268b2b3d3c171a3f",
+      "fixer_attempt_id": "attempt_001",
+      "fix_outcomes_resolved": 1,
+      "gate_status": "needs_review",
+      "gate_report_artifact": "gate/gate-report.json"
+    }
+  ],
+  "artifacts": {
+    "summary": "review/loop-summary.json"
+  }
+}

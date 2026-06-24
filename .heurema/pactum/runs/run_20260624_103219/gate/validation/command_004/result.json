@@ -1,0 +1,12 @@
+{
+  "schema": "pactum.validation_command_result.v1alpha1",
+  "id": "command_004",
+  "command": "env -u DEBATE_ACP_INTEGRATION go test -count=1 -tags acp_integration ./internal/backend/...",
+  "started_at": "2026-06-24T11:57:46.802123Z",
+  "finished_at": "2026-06-24T11:57:47.840079Z",
+  "duration_ms": 1037,
+  "exit_code": 0,
+  "timed_out": false,
+  "stdout": "gate/validation/command_004/stdout.log",
+  "stderr": "gate/validation/command_004/stderr.log"
+}

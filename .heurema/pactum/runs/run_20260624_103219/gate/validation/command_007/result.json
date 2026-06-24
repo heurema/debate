@@ -1,0 +1,12 @@
+{
+  "schema": "pactum.validation_command_result.v1alpha1",
+  "id": "command_007",
+  "command": "bash scripts/dep-guard.sh ./internal/backend/... github.com/heurema/debate/internal/engine github.com/heurema/debate/internal/backend github.com/coder/acp-go-sdk",
+  "started_at": "2026-06-24T11:57:49.178316Z",
+  "finished_at": "2026-06-24T11:57:50.01015Z",
+  "duration_ms": 831,
+  "exit_code": 0,
+  "timed_out": false,
+  "stdout": "gate/validation/command_007/stdout.log",
+  "stderr": "gate/validation/command_007/stderr.log"
+}
