@@ -1,0 +1,12 @@
+{
+  "schema": "pactum.validation_command_result.v1alpha1",
+  "id": "command_001",
+  "command": "test -z \"$(gofmt -l internal cmd scripts)\"",
+  "started_at": "2026-06-24T09:16:50.722491Z",
+  "finished_at": "2026-06-24T09:16:50.737034Z",
+  "duration_ms": 14,
+  "exit_code": 0,
+  "timed_out": false,
+  "stdout": "gate/validation/command_001/stdout.log",
+  "stderr": "gate/validation/command_001/stderr.log"
+}
