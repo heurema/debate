@@ -72,13 +72,14 @@ func (t *execTransport) Open(_ context.Context, spec transport.Spec) (transport.
 }
 
 // resolveCmd returns the argv for the subprocess.
-// Default: [agy, --model, spec.Model]. EnvAgyCommand overrides argv[0] only.
+// Default: [agy, --print, --model, spec.Model]. EnvAgyCommand overrides argv[0] only.
+// --print makes agy run a single prompt non-interactively (reads from stdin, prints response, exits).
 func (t *execTransport) resolveCmd(spec transport.Spec) []string {
 	name := "agy"
 	if override := t.getEnv(EnvAgyCommand); override != "" {
 		name = override
 	}
-	return []string{name, "--model", spec.Model}
+	return []string{name, "--print", "--model", spec.Model}
 }
 
 // resolveCwd returns the working directory for the subprocess.

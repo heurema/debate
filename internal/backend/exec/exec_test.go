@@ -210,8 +210,8 @@ func TestCmd_Default(t *testing.T) {
 	if rec.name != "agy" {
 		t.Errorf("name = %q, want %q", rec.name, "agy")
 	}
-	if len(rec.args) < 2 || rec.args[0] != "--model" || rec.args[1] != "gemini-pro" {
-		t.Errorf("args = %v, want [--model gemini-pro ...]", rec.args)
+	if len(rec.args) < 3 || rec.args[0] != "--print" || rec.args[1] != "--model" || rec.args[2] != "gemini-pro" {
+		t.Errorf("args = %v, want [--print --model gemini-pro]", rec.args)
 	}
 }
 
@@ -234,9 +234,9 @@ func TestCmd_Override(t *testing.T) {
 	if rec.name != "/usr/local/bin/custom-agy" {
 		t.Errorf("name = %q, want %q", rec.name, "/usr/local/bin/custom-agy")
 	}
-	// Model arg must still be wired.
-	if len(rec.args) < 2 || rec.args[0] != "--model" || rec.args[1] != "gemini-flash" {
-		t.Errorf("args = %v, want [--model gemini-flash ...]", rec.args)
+	// --print and model args must be preserved when the command is overridden.
+	if len(rec.args) < 3 || rec.args[0] != "--print" || rec.args[1] != "--model" || rec.args[2] != "gemini-flash" {
+		t.Errorf("args = %v, want [--print --model gemini-flash]", rec.args)
 	}
 }
 
