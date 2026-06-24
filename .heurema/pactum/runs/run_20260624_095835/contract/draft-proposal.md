@@ -1,0 +1,60 @@
+# Contract Draft Proposal
+
+## Status
+- Run id: run_20260624_095835
+- Status: accepted
+- Source: drafter_attempt
+- Drafter attempt: drafter_attempt_001
+- Drafter: codex
+- Accepted by: manual
+- Accepted at: 2026-06-24T10:03:07Z
+
+## In scope
+- Wire cmd/debate so `debate version` still works and `debate [flags] <task>` runs a debate using only the Go standard library flag package.
+- Resolve task input from a positional task, `--task @file`, and/or piped stdin, then assemble the debate brief with workspace context before task content.
+- Load the workspace via `config.Load` from the current working directory, passing parsed `--with` and `--synth` selections.
+- Build and run an `orchestrate.Config` from the resolved panel using backend-resolved sessions, `orchestrate.RoundRobin`, `prompt.NewPromptBuilder`, `verdict.New`, and loop limits from defaults plus `--max-rounds`.
+- Add a backend resolver/registry with a registered deterministic offline echo backend and an injectable resolver path for tests using engine mock sessions.
+- Run the resolved synthesizer exactly once after the debate loop to produce the final answer, then enforce stdout, stderr, JSON, quiet, sealed, and exit-code behavior.
+- Add end-to-end Go tests using temporary fixture `.heurema/debate` workspaces and deterministic mock/offline backends.
+
+## Out of scope
+- Real ACP, exec, API, network, subprocess, or model-backed transports.
+- The real grounded read-only sandbox behind `--sealed`; this slice may only propagate the sealed/read-only intent into transport specs.
+- `debate init`, `debate new`, and `debate validate` subcommands.
+- Tag-based `--with` selectors; `--with` selects persona IDs only.
+- Retry, nudge, recovery replay, degraded-participant behavior, or streaming transport behavior.
+- Changing the persona/config schema, signal schema, prompt policy, verdict semantics, or internal/engine behavior except where wiring requires compatible calls.
+
+## Acceptance criteria
+- `debate version` prints `debate <Version>` to stdout and exits 0.
+- `cmd/debate` uses the standard library `flag` package and supports `--with`, `--synth`, `--max-rounds`, `--json`, `-q`, `--quiet`, `--sealed`, and `--task @path`; unknown flags or invalid flag values exit 1 with a clear stderr error.
+- Task input supports a positional task, `--task @file`, and piped stdin; positional and `--task` are mutually exclusive, piped stdin is appended after the base task when present, and an empty final task is a fail-fast error.
+- The assembled brief places `.heurema/debate/context.md` content before task content, and tests assert that debater prompts receive context before task text.
+- `config.Load` is called before opening sessions, with `--with` parsed as persona IDs preserving CLI order and `--synth` passed as the synthesizer override.
+- All validation happens before any session is opened: task validity, max-rounds >= 1, workspace load, non-empty panel, synthesizer resolution, and registered backend availability for every panel member and the synthesizer.
+- Each opened session receives a `transport.Spec` populated from the persona ID, model, effort, system prompt, and `ReadOnly` set from `--sealed`; all opened sessions are closed on success and error paths.
+- The default runtime registry includes an offline backend name usable from persona frontmatter; it never performs network, subprocess, or model calls and returns deterministic content containing a valid fenced `signal` block for debater turns.
+- The test-injectable resolver can provide mock sessions and records open/send behavior so tests verify fail-fast zero-open cases and exact synthesizer send count.
+- The debate run uses the resolved panel order, `orchestrate.RoundRobin(false)`, `prompt.NewPromptBuilder(brief)`, `verdict.New(verdict.AllDone)`, and loop limits `Max`, `Settle`, and `Patience` with `--max-rounds` overriding only `Max`.
+- After `orchestrate.Run` returns settled, stalemate, or max, the synthesizer session is sent exactly one prompt containing the brief and full transcript in turn order; stdout is the synthesizer response.
+- Without `--json`, stdout contains only the final answer plus a trailing newline. With `--json`, stdout contains one valid JSON object with at least `answer` and `outcome.reason`/`outcome.rounds`, where `answer` equals the final synthesizer response.
+- Live debate trace output is written only to stderr, never stdout; `-q`/`--quiet` suppresses it, and non-TTY stderr auto-suppresses it. Tests cover quiet, off-TTY quiet, and trace-enabled behavior through an injectable terminal detector or equivalent seam.
+- Process exit code is 0 for `settled`, 2 for `stalemate` or `max` after producing the final answer, and 1 for validation errors, backend/open/send errors, synthesizer errors, or unexpected outcomes.
+
+## Validation commands
+- bash scripts/check-gofmt.sh
+- go test -count=1 ./...
+- go vet ./...
+- go build ./cmd/debate
+- bash scripts/dep-guard.sh ./internal/engine/... github.com/heurema/debate/internal/engine
+- bash scripts/dep-guard.sh ./cmd/debate github.com/heurema/debate/cmd/debate github.com/heurema/debate/internal/debate github.com/heurema/debate/internal/engine gopkg.in/yaml.v3
+
+## Assumptions
+- `--with` is a comma-separated persona ID list such as `--with proposer,skeptic`.
+- `--task` accepts only the `@path` file form in this slice; literal task text belongs in the positional argument or stdin.
+- Default loop limits are `Max=10`, `Settle=2`, and `Patience=3`; only `Max` is configurable by this slice.
+- The default verdict mode for the CLI is `verdict.AllDone`; quorum remains available in the library but has no CLI flag in this slice.
+- `--json` changes stdout from plain answer text to a small structured result object while preserving the same exit-code contract.
+- Fixture workspaces that should run offline specify the offline backend explicitly for debaters and synthesizer personas.
+
