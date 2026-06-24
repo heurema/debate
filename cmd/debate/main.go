@@ -32,6 +32,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	if len(os.Args) >= 2 {
+		switch os.Args[1] {
+		case "init":
+			os.Exit(cmdInit(os.Args[2:], os.Stdout, os.Stderr, workDir))
+		case "new":
+			os.Exit(cmdNew(os.Args[2:], os.Stdout, os.Stderr, workDir))
+		}
+	}
+
 	isTerminal := stderrIsTerminal()
 	code := parseAndRun(os.Args[1:], os.Stdout, os.Stderr, os.Stdin, isTerminal, os.Getenv, defaultResolver, workDir)
 	os.Exit(code)
