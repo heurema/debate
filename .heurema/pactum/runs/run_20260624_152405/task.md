@@ -1,0 +1,5 @@
+# Task
+
+Remove the context.md baseline-preamble feature so debate context lives only in the task (plus the grounded read-only sandbox). Drop the Context field from config.Workspace and stop reading .heurema/debate/context.md in internal/debate/config (an existing context.md is simply ignored). Make internal/debate/runner assemble the debate brief from the task alone, with no context preamble, and remove any use of Workspace.Context in the runner and synthesizer. Make debate init in cmd/debate scaffold only the two starter debater personas (proposer, skeptic) and no longer create a context.md file. Update all affected tests so none assert context.md creation or a Workspace.Context field, the init test asserts the workspace loads with the two-debater panel and no context.md, and the runner test asserts the brief equals the task. Keep everything else (grounding, backends, personas, engine) unchanged and introduce no new dependency. Out of scope: docs updates (handled separately), grounding/backends/engine changes.
+
+Generated: 2026-06-24T15:24:05Z
