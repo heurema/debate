@@ -54,7 +54,7 @@ func makeE2EWorkspace(t *testing.T) string {
 	return root
 }
 
-// makeUnimplementedWorkspace creates a workspace whose personas use a real (unimplemented) backend.
+// makeUnimplementedWorkspace creates a workspace whose personas use an unknown backend.
 func makeUnimplementedWorkspace(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -63,9 +63,9 @@ func makeUnimplementedWorkspace(t *testing.T) string {
 	if err := os.MkdirAll(personasDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// model: claude-sonnet-4-6 infers backend claude-agent-acp, which is not implemented.
+	// backend: agy is not yet implemented and unknown to defaultResolver.
 	path := filepath.Join(personasDir, "agent.md")
-	content := "---\nmodel: claude-sonnet-4-6\neffort: low\n---\nYou are a debate participant.\n"
+	content := "---\nmodel: agy-model-1\neffort: low\nbackend: agy\n---\nYou are a debate participant.\n"
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -166,12 +166,12 @@ func TestE2E_EmptyTask_Exit1(t *testing.T) {
 	}
 }
 
-// (e) unimplemented backend fails fast with exit 1.
+// (e) unknown backend fails fast with exit 1.
 func TestE2E_UnimplementedBackend_Exit1(t *testing.T) {
 	workDir := makeUnimplementedWorkspace(t)
 	var stdout, stderr bytes.Buffer
 
-	// defaultResolver returns error for claude-agent-acp.
+	// defaultResolver returns error for unknown backend "agy".
 	code := parseAndRun(
 		[]string{"any task"},
 		&stdout, &stderr, strings.NewReader(""),
@@ -183,6 +183,21 @@ func TestE2E_UnimplementedBackend_Exit1(t *testing.T) {
 	}
 	if stdout.Len() != 0 {
 		t.Errorf("stdout should be empty on backend error; got: %s", stdout.String())
+	}
+}
+
+// TestDefaultResolver_ACPBackendsResolve asserts that claude-agent-acp and codex-acp
+// resolve to a transport.Transport in the default resolver without opening a real session.
+func TestDefaultResolver_ACPBackendsResolve(t *testing.T) {
+	for _, backend := range []string{"claude-agent-acp", "codex-acp"} {
+		tr, err := defaultResolver(backend)
+		if err != nil {
+			t.Errorf("defaultResolver(%q): %v", backend, err)
+			continue
+		}
+		if tr == nil {
+			t.Errorf("defaultResolver(%q): returned nil transport", backend)
+		}
 	}
 }
 

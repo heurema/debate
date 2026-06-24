@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/heurema/debate/internal/backend/acp"
 	"github.com/heurema/debate/internal/debate/runner"
 	"github.com/heurema/debate/internal/engine/orchestrate"
 	"github.com/heurema/debate/internal/engine/transport"
@@ -45,13 +46,12 @@ func stderrIsTerminal() bool {
 }
 
 // defaultResolver resolves backend identifiers to transports.
-// Only echo is implemented in this slice; real backends are pending the acp slice.
 func defaultResolver(backend string) (transport.Transport, error) {
 	switch backend {
 	case "echo":
 		return echo.New(), nil
-	case "claude-agent-acp", "codex-acp", "agy":
-		return nil, fmt.Errorf("backend %q is not yet implemented (pending acp slice)", backend)
+	case acp.BackendClaude, acp.BackendCodex:
+		return acp.New(backend, os.Getenv, nil)
 	default:
 		return nil, fmt.Errorf("unknown backend %q", backend)
 	}
