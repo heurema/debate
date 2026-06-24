@@ -1,0 +1,52 @@
+{
+  "schema": "pactum.contract_draft_proposal.v1alpha1",
+  "run_id": "run_20260624_085539",
+  "status": "accepted",
+  "created_at": "2026-06-24T08:55:48Z",
+  "source": "drafter_attempt",
+  "drafter_attempt_id": "drafter_attempt_001",
+  "drafter": "codex",
+  "in_scope": [
+    "Implement internal/debate signal parsing for a trailing fenced signal block containing JSON fields position string, objections []string, and done bool.",
+    "Implement an internal/debate PromptBuilder assignable to orchestrate.PromptBuilder, with Delta and Full render modes.",
+    "Implement an internal/debate Verdict assignable to orchestrate.Verdict, configurable for until values all_done and quorum.",
+    "Add unit tests under internal/debate using internal/engine/transport/mock scripted responses through orchestrate.Run.",
+    "Preserve the dependency direction: internal/debate may depend on internal/engine, while internal/engine remains debate-agnostic."
+  ],
+  "out_of_scope": [
+    "Real acp, exec, or api transport implementations and external model calls.",
+    "CLI behavior, command flags, stdout/stderr UX, and cmd/debate changes.",
+    ".heurema/debate discovery, config loading, persona parsing, and persona file handling.",
+    "Synthesizer behavior or final-answer generation.",
+    "Nudge-retry orchestration for unparsed signals; this slice only parses and treats unparsed signals as not done."
+  ],
+  "acceptance": [
+    "Given turn text ending with a fenced signal block labeled signal containing JSON {\"position\":\"ship\",\"objections\":[],\"done\":true}, the parser returns a typed signal with those values and parsed_ok true.",
+    "Given missing, non-trailing, malformed, non-JSON, or wrong-typed signal blocks, the parser returns parsed_ok false and does not panic.",
+    "Given a parsed signal with done true and one or more objections, the parser normalizes the result so done is false while preserving the parsed objections.",
+    "The prompt builder output contains the task/context brief, moderator rules of engagement, a transcript board, and the signal-format instruction for every rendered turn.",
+    "In Delta mode, the prompt builder renders the board from Transcript.DeltaFor for the speaking participant; in Full mode, it renders the full transcript from Transcript.All.",
+    "The verdict returns Clean true for all_done only when every current-round speaker has a parsed signal with done true.",
+    "The verdict returns Clean true for quorum only when a strict majority of current-round speakers have parsed signals with done true.",
+    "The verdict treats any speaker with an unparsed or invalid signal as not done.",
+    "The verdict sets Progress true only when the current open-objection set differs from the previous assessed round's open-objection set.",
+    "Mock-backed orchestrate.Run tests cover settled convergence after the configured settle streak, quorum convergence, stalemate on a frozen objection set, max-round termination, and unparsed-signal handling.",
+    "All new tests run without real backend processes, network access, API keys, persona files, or .heurema/debate configuration.",
+    "internal/engine packages do not import internal/debate or product-layer packages."
+  ],
+  "validation": [
+    "go test ./internal/debate -count=1",
+    "go test ./... -count=1",
+    "go vet ./...",
+    "bash scripts/dep-guard.sh",
+    "make check"
+  ],
+  "assumptions": [
+    "Quorum means a strict majority: done_count \u003e total_speakers/2.",
+    "Open-objection identity is exact string equality after trimming surrounding whitespace; duplicate objections are coalesced for set comparison.",
+    "Only turns from the current RoundContext.Round are assessed for the current verdict; prior assessments are used only to compare the previous open-objection set.",
+    "Prompt wording may be deterministic implementation text as long as the required sections and Delta/Full transcript sources are observable in tests."
+  ],
+  "accepted_at": "2026-06-24T08:57:32Z",
+  "accepted_by": "manual"
+}

@@ -1,0 +1,22 @@
+{
+  "schema": "pactum.run.v1alpha1",
+  "run_id": "run_20260624_085539",
+  "status": "contract_approved",
+  "task": "Slice 2: implement the debate policy layer in internal/debate on top of the engine, exercised only with the mock backend. (1) internal/debate/signal: parse a structured signal {position string, objections []string, done bool} from a turn text — the speaker ends its reply with a fenced signal block (triple-backtick signal ... containing JSON); the parser extracts and validates it, returns a typed result plus a parsed-ok flag, and applies the invariant that done==true with non-empty objections is treated as done=false. (2) internal/debate/prompt: a PromptBuilder matching orchestrate.PromptBuilder that renders a per-turn user message = brief (task+context) + moderator rules-of-engagement + the delta board (rendered from Transcript.DeltaFor for the speaking participant) + the signal-format instruction; support RenderMode Delta and Full. (3) internal/debate/verdict: a Verdict matching orchestrate.Verdict that parses each round turns signals and returns loop.RoundResult where Clean = all speakers done (until=all_done) or a majority done (until=quorum), and Progress = the open-objection set changed vs previous round; configurable until in {all_done, quorum}; an unparsed signal makes that speaker not-done. Unit tests use only the mock backend with scripted signal-bearing turns: convergence after the settle streak, quorum, stalemate on a frozen objection set, max rounds, and unparsed-signal handling. internal/debate imports internal/engine only (one-way). Out of scope: real acp/exec/api backends, CLI, persona files, .heurema/debate discovery/config, synthesizer, and nudge-retry orchestration (parser only).",
+  "created_at": "2026-06-24T08:55:39.371477Z",
+  "updated_at": "2026-06-24T09:05:17.951131Z",
+  "repo_root": ".",
+  "workspace": ".heurema/pactum",
+  "map_run_id": "map_20260624_081848",
+  "artifacts": {
+    "task": "task.md",
+    "repo_context": "context/repo-context.md",
+    "search_results": "context/search-results.json",
+    "executor_context": "context/executor-context.md",
+    "contract_json": "contract/contract.json",
+    "contract_md": "contract/contract.md",
+    "prompt": "contract/prompt.md",
+    "prompt_manifest": "contract/prompt-manifest.json",
+    "approval": "contract/approval.json"
+  }
+}
