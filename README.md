@@ -12,7 +12,7 @@
 
 `debate` is a small contract-first CLI for running structured multi-agent debates over a task, design choice, review target, or implementation plan.
 
-It gives each participant a persona, collects their arguments round by round, and can hand the transcript to a synthesizer for a final decision. The repository is intentionally compact: the core is a Go CLI, while `.heurema/` holds local personas, prompts, Pactum runs, and other project workflow state.
+It gives each participant a persona, collects their arguments round by round, and can hand the transcript to a synthesizer for a final decision. The repository is intentionally compact: the core is a Go CLI, while `.heurema/` holds local personas, prompts, and project-local state.
 
 ## What It Does
 
@@ -134,7 +134,7 @@ Build the binary:
 go build -o debate ./cmd/debate
 ```
 
-The project is developed with a contract-first workflow. Pactum artifacts live under `.heurema/pactum`, and design notes live in [`docs/DESIGN.md`](docs/DESIGN.md).
+Design notes live in [`docs/DESIGN.md`](docs/DESIGN.md).
 
 ## Status
 
