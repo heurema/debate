@@ -1,0 +1,1 @@
+{"schema":"pactum.agent_retry_decision.v1alpha1","stage":"contract_fixer","attempt_id":"contract_fixer_attempt_009","kind":"empty_output","reason":"transport returned no output","retryable":true,"read_only":true,"attempt_number":1,"delay_ms":1030}

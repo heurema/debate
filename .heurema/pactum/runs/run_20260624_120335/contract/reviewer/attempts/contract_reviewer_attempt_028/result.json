@@ -1,0 +1,14 @@
+{
+  "schema": "pactum.contract_reviewer_result.v1alpha1",
+  "run_id": "run_20260624_120335",
+  "attempt_id": "contract_reviewer_attempt_028",
+  "reviewer": "codex",
+  "lens": "testability",
+  "started_at": "2026-06-24T12:29:01.173736Z",
+  "finished_at": "2026-06-24T12:29:31.359234Z",
+  "duration_ms": 30185,
+  "exit_code": 0,
+  "timed_out": false,
+  "stdout": "contract/reviewer/attempts/contract_reviewer_attempt_028/stdout.log",
+  "stderr": "contract/reviewer/attempts/contract_reviewer_attempt_028/stderr.log"
+}

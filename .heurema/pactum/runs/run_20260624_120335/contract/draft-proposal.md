@@ -1,0 +1,48 @@
+# Contract Draft Proposal
+
+## Status
+- Run id: run_20260624_120335
+- Status: accepted
+- Source: drafter_attempt
+- Drafter attempt: drafter_attempt_001
+- Drafter: codex
+- Accepted by: manual
+- Accepted at: 2026-06-24T12:06:31Z
+
+## In scope
+- Add an internal/backend/exec package that exposes an agy backend transport implementing transport.Transport with an injectable subprocess runner for deterministic tests.
+- Implement exec sessions that resolve command, model, system prompt, and working directory at Open, then spawn a fresh CLI process on every Send.
+- Wire backend "agy" into cmd/debate defaultResolver while preserving existing echo, claude-agent-acp, and codex-acp resolution.
+- Add deterministic unit tests for command/model/env wiring, stdin/stdout behavior, prompt accumulation, grounded versus sealed cwd behavior, Close cleanup, and error classification.
+- Add a real agy integration test guarded by a build tag and env var so it compiles under the tag and skips unless explicitly enabled.
+
+## Out of scope
+- Implementing or modifying the api backend.
+- Changing internal/engine transport interfaces, orchestrate behavior, prompt rendering, or transport.Classify semantics.
+- Changing internal/debate behavior beyond the imports and resolver wiring needed to make backend "agy" usable.
+- Adding init/new scaffolding or other CLI features outside the exec backend wiring.
+- Requiring real agy, network access, or paid model calls in default unit tests.
+
+## Acceptance criteria
+- internal/backend/exec.New accepts backend "agy", rejects unknown backends, and returns a non-nil transport.Transport without spawning a subprocess.
+- Open rejects an empty spec.Model with a classified client error and otherwise prepares a session without starting a persistent process.
+- Each Send appends the received prompt to the session history, starts exactly one subprocess, writes one full stdin payload containing spec.System when non-empty plus all prompts received by that session in order including the current prompt, closes stdin, reads stdout to EOF, waits for process completion, and returns stdout as transport.Result.Content.
+- The agy default command is derived from backend "agy", the selected invocation includes or otherwise threads spec.Model, and an environment override for the agy command is covered by tests.
+- Grounded sessions use the project/process working directory as the subprocess cwd; sealed sessions use a fresh empty temp directory that is not the project directory and is cleaned up by Close.
+- Close is idempotent and does not assume any persistent process exists.
+- Exec errors wrap transport sentinel errors so transport.Classify reports deadline for context deadline, canceled for cancellation, client_error for spawn/config/nonzero-exit errors, and transport_drop for stdin/stdout pipe failures.
+- cmd/debate defaultResolver resolves backend "agy" to the exec transport, still resolves echo and both ACP backends, and still returns an error for an actually unknown backend.
+- Default tests use a fake CLI or injectable runner and do not invoke real agy.
+- The agy integration test is skipped unless its env gate is set, but compiles and runs to a skip under its build tag.
+
+## Validation commands
+- ./scripts/check-gofmt.sh
+- go test ./...
+- go test -tags agy_integration ./internal/backend/exec
+- ./scripts/dep-guard.sh ./internal/backend/exec github.com/heurema/debate/internal/backend github.com/heurema/debate/internal/engine
+
+## Assumptions
+- The command override env var for agy may be introduced as DEBATE_AGY_COMMAND unless the human prefers a different existing naming convention.
+- agy behaves as a stateless stdin/stdout CLI and can receive the selected model through argv or environment without an interactive terminal.
+- Existing persona inference from gemini-* models to backend "agy" is already sufficient and does not need parser changes.
+
