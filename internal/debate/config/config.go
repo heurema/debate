@@ -161,7 +161,7 @@ func resolvePanel(personas []persona.Persona, byID map[string]persona.Persona, w
 		return panel, nil
 	}
 
-	// Default: all debater personas in lexicographic order (personas already sorted by filename=ID).
+	// Default: all debater personas in lexicographic order by persona ID.
 	var panel []persona.Persona
 	for _, p := range personas {
 		if p.Role == "debater" {
@@ -171,6 +171,7 @@ func resolvePanel(personas []persona.Persona, byID map[string]persona.Persona, w
 	if len(panel) == 0 {
 		return nil, fmt.Errorf("panel: no debater personas found")
 	}
+	sort.Slice(panel, func(i, j int) bool { return panel[i].ID < panel[j].ID })
 	return panel, nil
 }
 
