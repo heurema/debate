@@ -39,10 +39,6 @@ func makeE2EWorkspace(t *testing.T) string {
 	if err := os.MkdirAll(personasDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	ctxPath := filepath.Join(debDir, "context.md")
-	if err := os.WriteFile(ctxPath, []byte("Fixture workspace context.\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	for _, name := range []string{"alice", "bob"} {
 		path := filepath.Join(personasDir, name+".md")
 		content := "---\nmodel: echo-local\neffort: low\nbackend: echo\n---\n" +

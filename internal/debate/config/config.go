@@ -18,7 +18,6 @@ const (
 	heuremaDirName  = ".heurema"
 	debateDirName   = "debate"
 	configFileName  = "config.yml"
-	contextFileName = "context.md"
 	personasDirName = "personas"
 
 	defaultSynthModel  = "claude-haiku-4-5"
@@ -29,7 +28,6 @@ const (
 // Workspace holds all loaded and resolved debate workspace data.
 type Workspace struct {
 	Dir         string
-	Context     string
 	Panel       []persona.Persona
 	Synthesizer persona.Persona
 }
@@ -60,7 +58,7 @@ type configYAML struct {
 }
 
 // Load discovers the .heurema/debate workspace rooted at or above startDir,
-// then loads config, context, and personas, and resolves the debater panel and synthesizer.
+// then loads config and personas, and resolves the debater panel and synthesizer.
 // withList, if non-empty, overrides the panel selector. synthOverride, if non-empty, names the synthesizer.
 func Load(startDir string, withList []string, synthOverride string) (Workspace, error) {
 	// 1. Discover
@@ -84,16 +82,7 @@ func Load(startDir string, withList []string, synthOverride string) (Workspace, 
 		return Workspace{}, fmt.Errorf("config.yml: %w", err)
 	}
 
-	// 3. Read context.md
-	var ctx string
-	ctxPath := filepath.Join(debDir, contextFileName)
-	if data, err := os.ReadFile(ctxPath); err == nil {
-		ctx = string(data)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return Workspace{}, fmt.Errorf("context.md: %w", err)
-	}
-
-	// 4. Parse personas in lexicographic filename order
+	// 3. Parse personas in lexicographic filename order
 	personasPath := filepath.Join(debDir, personasDirName)
 	entries, err := filepath.Glob(filepath.Join(personasPath, "*.md"))
 	if err != nil {
@@ -129,7 +118,6 @@ func Load(startDir string, withList []string, synthOverride string) (Workspace, 
 
 	return Workspace{
 		Dir:         debDir,
-		Context:     ctx,
 		Panel:       panel,
 		Synthesizer: synth,
 	}, nil

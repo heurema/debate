@@ -64,7 +64,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		return Result{}, fmt.Errorf("panel is empty")
 	}
 
-	brief := assembleBrief(ws.Context, cfg.Task)
+	brief := cfg.Task
 
 	// Open one session per panel participant.
 	var sessions []transport.Session
@@ -123,14 +123,6 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		Outcome: res.Outcome,
 		Turns:   res.Transcript.All(),
 	}, nil
-}
-
-func assembleBrief(wsCtx, task string) string {
-	wsCtx = strings.TrimSpace(wsCtx)
-	if wsCtx == "" {
-		return task
-	}
-	return wsCtx + "\n\n" + task
 }
 
 func synthesize(ctx context.Context, cfg Config, ws config.Workspace, tr *orchestrate.Transcript) (string, error) {

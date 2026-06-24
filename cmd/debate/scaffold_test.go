@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,6 +33,11 @@ func TestCmdInit_CreatesWorkspaceThatLoads(t *testing.T) {
 	}
 	if ws.Synthesizer.Role != "synthesizer" {
 		t.Errorf("Synthesizer role = %q, want synthesizer", ws.Synthesizer.Role)
+	}
+
+	contextPath := filepath.Join(workDir, ".heurema", "debate", "context.md")
+	if _, err := os.Stat(contextPath); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("context.md should not be created by init; stat err: %v", err)
 	}
 }
 

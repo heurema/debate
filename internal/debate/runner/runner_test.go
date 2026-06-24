@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/heurema/debate/internal/debate/runner"
@@ -34,10 +35,6 @@ func makeWorkspace(t *testing.T, personas map[string]string) string {
 	debDir := filepath.Join(root, ".heurema", "debate")
 	personasDir := filepath.Join(debDir, "personas")
 	if err := os.MkdirAll(personasDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	ctxPath := filepath.Join(debDir, "context.md")
-	if err := os.WriteFile(ctxPath, []byte("Workspace context.\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	for name, content := range personas {
@@ -94,6 +91,56 @@ func TestRun_EmptyTask(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for whitespace-only task, got nil")
+	}
+}
+
+func TestRun_BriefEqualsTask(t *testing.T) {
+	const task = "should we use tabs or spaces?"
+	workDir := makeWorkspace(t, map[string]string{"alice": echoPersonaContent})
+
+	const agreedContent = "I agree.\n\n```signal\n{\"position\": \"agree\", \"objections\": [], \"done\": true}\n```"
+	aliceSess := mock.NewSession([]mock.ScriptedResult{
+		{Result: transport.Result{Content: agreedContent}},
+		{Result: transport.Result{Content: agreedContent}},
+	})
+	synthSess := mock.NewSession([]mock.ScriptedResult{
+		{Result: transport.Result{Content: "synthesis"}},
+	})
+
+	_, err := runner.Run(context.Background(), runner.Config{
+		WorkDir:   workDir,
+		Task:      task,
+		MaxRounds: 5,
+		Resolver: fixedResolver(map[string]*mock.Session{
+			"alice":       aliceSess,
+			"synthesizer": synthSess,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	prompts := aliceSess.Prompts()
+	if len(prompts) == 0 {
+		t.Fatal("alice session received no prompts")
+	}
+	// The prompt builder embeds the brief under "## Brief\n\n"; verify the brief is the task alone.
+	const briefMarker = "## Brief\n\n"
+	idx := strings.Index(prompts[0], briefMarker)
+	if idx < 0 {
+		t.Fatalf("prompt does not contain %q", briefMarker)
+	}
+	afterMarker := prompts[0][idx+len(briefMarker):]
+	// Brief runs until the next section or end.
+	endIdx := strings.Index(afterMarker, "\n\n")
+	var brief string
+	if endIdx < 0 {
+		brief = afterMarker
+	} else {
+		brief = afterMarker[:endIdx]
+	}
+	if brief != task {
+		t.Errorf("assembled brief = %q, want %q", brief, task)
 	}
 }
 

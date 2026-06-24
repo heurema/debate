@@ -102,9 +102,6 @@ func TestLoad_ValidWorkspace(t *testing.T) {
 	if ws.Synthesizer.Role != "synthesizer" {
 		t.Errorf("Synthesizer Role = %q, want synthesizer", ws.Synthesizer.Role)
 	}
-	if !strings.Contains(ws.Context, "baseline") {
-		t.Errorf("Context missing expected content: %q", ws.Context)
-	}
 }
 
 // TestLoad_DefaultPanel verifies that with no config table and no withList, all debaters are used.
@@ -201,17 +198,26 @@ func TestLoad_SynthOverrideMissing(t *testing.T) {
 	}
 }
 
-// TestLoad_NoContextMD verifies that a missing context.md is allowed.
+// TestLoad_NoContextMD verifies that context.md is not required; its presence or absence does not affect loading.
 func TestLoad_NoContextMD(t *testing.T) {
 	root := makeDebateDir(t, map[string]string{
 		"personas/alice.md": alicePersona,
 	})
-	ws, err := config.Load(root, nil, "")
+	_, err := config.Load(root, nil, "")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if ws.Context != "" {
-		t.Errorf("Context = %q, want empty string when context.md absent", ws.Context)
+}
+
+// TestLoad_ContextMDIgnored verifies that a context.md present in a workspace is silently ignored.
+func TestLoad_ContextMDIgnored(t *testing.T) {
+	root := makeDebateDir(t, map[string]string{
+		"personas/alice.md": alicePersona,
+		"context.md":        "# Some context that should be ignored.\n",
+	})
+	_, err := config.Load(root, nil, "")
+	if err != nil {
+		t.Fatalf("Load: %v (context.md should be silently ignored)", err)
 	}
 }
 

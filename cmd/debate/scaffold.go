@@ -32,10 +32,6 @@ effort: medium
 You are the Skeptic. Challenge the proposition by identifying weaknesses, counter-examples, and unresolved assumptions. Be constructive and specific.
 `
 
-const contextTemplate = `<!-- Add context relevant to your debate topic here. -->
-<!-- This preamble is prepended to every turn; keep it concise. -->
-`
-
 // cmdInit implements the "debate init" subcommand.
 // It scaffolds a .heurema/debate workspace under workDir, skipping files that already exist.
 func cmdInit(args []string, stdout, stderr io.Writer, workDir string) int {
@@ -67,7 +63,6 @@ func cmdInit(args []string, stdout, stderr io.Writer, workDir string) int {
 	}{
 		{filepath.Join(personasDir, "proposer.md"), proposerTemplate},
 		{filepath.Join(personasDir, "skeptic.md"), skepticTemplate},
-		{filepath.Join(debDir, "context.md"), contextTemplate},
 	}
 
 	for _, f := range files {
