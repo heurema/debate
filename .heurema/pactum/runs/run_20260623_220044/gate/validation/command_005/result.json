@@ -1,0 +1,12 @@
+{
+  "schema": "pactum.validation_command_result.v1alpha1",
+  "id": "command_005",
+  "command": "bash scripts/dep-guard.sh",
+  "started_at": "2026-06-24T08:48:18.919854Z",
+  "finished_at": "2026-06-24T08:48:19.036536Z",
+  "duration_ms": 116,
+  "exit_code": 0,
+  "timed_out": false,
+  "stdout": "gate/validation/command_005/stdout.log",
+  "stderr": "gate/validation/command_005/stderr.log"
+}
