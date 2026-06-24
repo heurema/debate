@@ -1,0 +1,49 @@
+# Contract Draft Proposal
+
+## Status
+- Run id: run_20260624_092233
+- Status: accepted
+- Source: drafter_attempt
+- Drafter attempt: drafter_attempt_001
+- Drafter: codex
+- Accepted by: manual
+- Accepted at: 2026-06-24T09:25:07Z
+
+## In scope
+- Add internal/debate library types and functions for discovering, loading, validating, and resolving a .heurema/debate workspace from a caller-supplied start directory.
+- Parse optional config.yml, optional context.md, and persona markdown files in .heurema/debate/personas/*.md using strict YAML decoding.
+- Implement backend inference, explicit backend override handling, debater panel resolution, and synthesizer resolution without opening transports or running the engine.
+- Add fixture-based Go unit tests under internal/debate for valid workspaces, walk-up discovery, strict parsing, backend inference, selection, synthesizer fallback, and failure cases.
+- Update Go module metadata only as needed for gopkg.in/yaml.v3.
+
+## Out of scope
+- Running orchestrate.Run, executing the synthesizer, or performing any debate engine run.
+- Real ACP, exec, API, network, external CLI, or model invocation.
+- cmd/debate CLI wiring, flags, validation command, or binary behavior.
+- Workspace scaffolding commands such as init or new.
+- Tag-based persona selection; tags are parsed only.
+
+## Acceptance criteria
+- Starting from a nested directory below a fixture workspace finds the nearest ancestor .heurema/debate directory; starting outside any workspace returns a clear missing-workspace error.
+- A missing config.yml is accepted; a present config.yml accepts only a top-level table list and rejects unknown top-level keys.
+- A missing context.md yields an empty baseline preamble; a present context.md is loaded as the exact markdown string exposed to callers.
+- Persona loading reads .md files from personas, assigns persona id from the filename without .md, requires YAML frontmatter and a non-empty markdown body, defaults omitted role to debater, accepts only role debater or synthesizer, accepts optional tags as a string list, and rejects unknown frontmatter keys.
+- Backend inference maps claude-* plus opus and sonnet to claude-agent-acp, gpt-* plus codex and o* to codex-acp, and gemini-* to agy; an explicit backend is preserved and overrides inference.
+- Personas resolved to api/acp backends fail validation when model or effort is missing or empty; an absent backend with an unsupported model returns a clear validation error.
+- Panel resolution preserves explicit selection order or config.table order; with neither present, it returns all debater personas in deterministic order; role synthesizer personas are never included in the debater panel.
+- Unknown panel names, selections that resolve to no debaters, and empty panels return clear errors before any engine or transport code would be used.
+- Synthesizer resolution chooses an explicit synthesizer name when provided, otherwise the persona named synthesizer, otherwise a built-in default persona with model claude-haiku-4-5 and a non-empty minimal prompt; an explicit unknown synthesizer name returns a clear error.
+- All new tests are fixture-only and pass without invoking orchestrate.Run, cmd/debate, ACP/API/exec transports, external CLIs, network, or real model calls.
+
+## Validation commands
+- go test ./internal/debate/... -count=1
+- go test ./... -count=1
+- go vet ./...
+
+## Assumptions
+- When explicit panel selection and config.table are both supplied, the explicit selection takes precedence.
+- The all-debaters fallback order is lexicographic by persona id for deterministic tests.
+- Clear error wording is validated by stable substrings rather than exact full error messages.
+- The built-in synthesizer may use id synthesizer and infer its backend from claude-haiku-4-5.
+- No clarification answers were provided for this draft.
+
