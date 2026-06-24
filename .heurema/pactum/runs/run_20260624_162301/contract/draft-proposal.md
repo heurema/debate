@@ -1,0 +1,45 @@
+# Contract Draft Proposal
+
+## Status
+- Run id: run_20260624_162301
+- Status: accepted
+- Source: drafter_attempt
+- Drafter attempt: drafter_attempt_001
+- Drafter: codex
+- Accepted by: manual
+- Accepted at: 2026-06-24T16:24:48Z
+
+## In scope
+- Refactor cmd/debate CLI parsing to use github.com/alecthomas/kong for the top-level CLI, the default debate run command, and the existing version/init/new subcommands.
+- Add github.com/alecthomas/kong as a direct Go module dependency and update go.sum as required.
+- Update cmd/debate tests to cover run flags before and after the positional task argument, including at least --json and --max-rounds.
+- Update cmd/debate tests to preserve version, init, new <name>, and new --role behavior.
+
+## Out of scope
+- Changes to internal/engine, internal/debate, internal/backend, resolver behavior, runner behavior, synthesizer behavior, or transport behavior.
+- Adding new CLI subcommands, including validate.
+- Changing the stdout/stderr contract, JSON output schema, debate trace policy, or exit-code mapping.
+- Changing persona scaffold file contents except where strictly required by CLI parser integration.
+
+## Acceptance criteria
+- cmd/debate no longer uses the standard library flag package for CLI parsing and instead routes CLI parsing through kong.
+- debate "<task>" still invokes the debate run path as the default command without requiring an explicit subcommand.
+- debate version, debate init, and debate new <name> keep their existing successful and error behaviors covered by current cmd/debate tests.
+- Run flags --with, --synth, --max-rounds, --json, -q/--quiet, --sealed, and --task are accepted both before and after the positional task argument.
+- The new command's --role flag still accepts debater and synthesizer, rejects invalid roles, and creates the expected persona role.
+- Task assembly still supports positional arguments, --task literal text, --task @file, and piped stdin as composable non-empty task sources.
+- Exit codes remain 0 for settled, 2 for stalemate/max not-converged outcomes, and 1 for parser, empty-task, backend, or runtime errors.
+- Non-JSON output continues to write only the final answer to stdout, with debate trace on stderr only when trace policy enables it; --json continues to suppress stderr trace.
+
+## Validation commands
+- ./scripts/check-gofmt.sh
+- go test ./cmd/debate
+- go test ./...
+- go vet ./...
+- go list -m github.com/alecthomas/kong
+
+## Assumptions
+- No specific kong version is pinned by the request; the version selected by Go module tooling is acceptable.
+- Preserving current task composition means keeping the existing assembleTask ordering: --task content, then positional arguments joined with spaces, then piped stdin, joined by newlines.
+- It is acceptable to reshape cmd/debate test helpers around a kong-backed CLI implementation as long as the externally observable CLI behavior remains covered.
+

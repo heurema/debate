@@ -1,0 +1,74 @@
+{
+  "schema": "pactum.review_loop.v1alpha1",
+  "run_id": "run_20260624_162301",
+  "started_at": "2026-06-24T16:53:27Z",
+  "finished_at": "2026-06-24T17:10:25Z",
+  "reviewer": "codex-xhigh",
+  "max_rounds": 10,
+  "stalemate_patience": 2,
+  "clean_rounds_required": 1,
+  "terminal_reason": "reviewer_findings_unparsed",
+  "rounds": [
+    {
+      "round": 1,
+      "reviewer_attempt_id": "reviewer_attempt_005",
+      "reviewer_attempt_ids": [
+        "reviewer_attempt_005",
+        "reviewer_attempt_002",
+        "reviewer_attempt_007",
+        "reviewer_attempt_004",
+        "reviewer_attempt_003",
+        "reviewer_attempt_001"
+      ],
+      "reviewer_attempts": [
+        {
+          "attempt_id": "reviewer_attempt_005",
+          "reviewer": "codex-xhigh",
+          "lens": "correctness"
+        },
+        {
+          "attempt_id": "reviewer_attempt_002",
+          "reviewer": "codex-xhigh",
+          "lens": "implementation"
+        },
+        {
+          "attempt_id": "reviewer_attempt_007",
+          "reviewer": "codex-xhigh",
+          "lens": "implementation"
+        },
+        {
+          "attempt_id": "reviewer_attempt_004",
+          "reviewer": "codex-xhigh",
+          "lens": "tests"
+        },
+        {
+          "attempt_id": "reviewer_attempt_003",
+          "reviewer": "codex-xhigh",
+          "lens": "over_engineering"
+        },
+        {
+          "attempt_id": "reviewer_attempt_001",
+          "reviewer": "codex-xhigh",
+          "lens": "docs"
+        }
+      ],
+      "proposals_created": 8,
+      "proposals_accepted": 0,
+      "open_findings": 0,
+      "open_blocking_findings": 0,
+      "warnings": [
+        "lens=correctness attempt=1: no valid findings block — corrective retry",
+        "no valid reviewer findings block parsed — parse miss (inspect attempt stdout)",
+        "lens=correctness attempt=2: no valid reviewer findings block parsed — parse miss (inspect attempt stdout)",
+        "lens=implementation attempt=1: no valid findings block — corrective retry",
+        "no valid reviewer findings block parsed — parse miss (inspect attempt stdout)"
+      ],
+      "clean_streak": 0,
+      "unchanged_fingerprint_streak": 0,
+      "working_tree_fingerprint": "4d0c6a05dd2cd159b9f3cb2c4f53ca073f84cdfdfc88cb27209e3c16c0b81b1a"
+    }
+  ],
+  "artifacts": {
+    "summary": "review/loop-summary.json"
+  }
+}

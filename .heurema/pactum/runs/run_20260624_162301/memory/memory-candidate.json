@@ -1,0 +1,255 @@
+{
+  "schema": "pactum.memory_candidate.v1alpha1",
+  "run_id": "run_20260624_162301",
+  "created_at": "2026-06-24T17:16:57Z",
+  "source": "deterministic",
+  "status": "proposed",
+  "freshness_pin": {
+    "schema": "pactum.memory_freshness_pin.v1alpha1",
+    "review_state_sha256": "e7ffe583a26c2b2aae19eed3549efa50afb2fd85232ef87d497899950b921219"
+  },
+  "contract": {
+    "goal": "Replace the hand-written stdlib flag parsing in cmd/debate with github.com/alecthomas/kong (the CLI library pactum uses), so flags parse correctly in any position, while preserving every existing command, flag, and exit-code behavior.",
+    "in_scope": [
+      "Add github.com/alecthomas/kong and parse cmd/debate arguments with it, removing the hand-rolled flag.FlagSet / os.Args switch parsing in cmd/debate/main.go and cmd/debate/scaffold.go.",
+      "Model the debate run as kong's default command (bare `debate \"\u003ctask\u003e\"`) alongside the version, init, and new subcommands, with all flags as kong struct tags.",
+      "Preserve the exact existing behavior (commands, flags, task composition, exit codes, stdout/stderr) and make flags parse in any position relative to positionals.",
+      "Update the cmd/debate tests for kong, including assertions that flags work both before and after the positional argument."
+    ],
+    "out_of_scope": [
+      "Any change to internal/engine, internal/debate, or internal/backend.",
+      "Adding new subcommands (no validate) or new flags, or changing the backend resolver, runner, synthesizer, or IO contract.",
+      "Changing the debate algorithm, personas, or config."
+    ],
+    "acceptance_criteria": [
+      "cmd/debate parses all arguments with github.com/alecthomas/kong (added to go.mod and go.sum); the hand-rolled flag.NewFlagSet parsing and os.Args dispatch in main.go and scaffold.go are removed.",
+      "The CLI preserves the existing commands: a default run action invoked as `debate \"\u003ctask\u003e\"` with no subcommand word, plus subcommands `version`, `init`, and `new \u003cname\u003e`; the run is kong's default command so the bare-task form keeps working.",
+      "Flags parse in any position relative to the positional argument: `debate \"\u003ctask\u003e\" --json`, `debate --json \"\u003ctask\u003e\"`, `debate --max-rounds 2 \"\u003ctask\u003e\"`, `debate \"\u003ctask\u003e\" --max-rounds 2`, and `debate new \u003cname\u003e --role synthesizer` all apply the flag correctly. (This fixes the previous flags-after-positional bug.)",
+      "All existing run flags are preserved with the same names and meaning: --with (panel selectors), --synth, --max-rounds, --json, -q/--quiet, --sealed, and --task (@file); the new subcommand keeps its --role flag (debater|synthesizer, default debater).",
+      "Task sources still compose: the positional task, --task @file (file contents), and stdin (appended when piped); an empty resulting task is a fail-fast error.",
+      "Exit codes are unchanged: 0 when settled, 2 when not converged (stalemate or max), 1 on error; an unknown flag or subcommand prints a clear kong usage/help message with a non-zero exit; the stdout=final-answer / stderr=live-trace (auto-quiet off-TTY or with -q) contract and the --json output shape are unchanged.",
+      "cmd/debate tests are updated for kong and include assertions that a representative flag is honored both before and after the positional argument for the run command and for `new`.",
+      "go.mod and go.sum gain github.com/alecthomas/kong; internal/engine, internal/debate, and internal/backend are unchanged; check-gofmt, go build ./..., go vet ./..., and go test ./... pass, and the engine/backend/debate dep-guards still pass."
+    ],
+    "validation_commands": [
+      "bash scripts/check-gofmt.sh",
+      "go build ./...",
+      "go test -count=1 ./...",
+      "go vet ./...",
+      "go run ./cmd/debate version",
+      "bash scripts/dep-guard.sh ./internal/engine/... github.com/heurema/debate/internal/engine",
+      "bash scripts/dep-guard.sh ./internal/backend/... github.com/heurema/debate/internal/engine github.com/heurema/debate/internal/backend github.com/coder/acp-go-sdk",
+      "bash scripts/dep-guard.sh ./internal/debate/... github.com/heurema/debate/internal/engine github.com/heurema/debate/internal/debate gopkg.in/yaml.v3"
+    ]
+  },
+  "outcome": {
+    "gate_status": "needs_review",
+    "review_status": "approved",
+    "execution_exit_code": 0,
+    "validation_passed": true,
+    "changes_need_review": true
+  },
+  "changes": {
+    "changed_files": [
+      "cmd/debate/e2e_test.go",
+      "cmd/debate/main.go",
+      "cmd/debate/scaffold.go",
+      "cmd/debate/scaffold_test.go",
+      "go.mod",
+      "go.sum"
+    ],
+    "new_files": [],
+    "missing_files": []
+  },
+  "clarifications": [],
+  "review": {
+    "findings": [
+      {
+        "id": "f_001",
+        "message": "The kong default run is still exposed as an explicit `run` subcommand, adding a command outside the approved CLI surface and changing task composition for tasks whose first unquoted word is `run`.",
+        "severity": "medium",
+        "category": "correctness",
+        "file": "cmd/debate/main.go",
+        "line": 53,
+        "blocking": true,
+        "status": "resolved",
+        "resolution": "Removed the top-level Kong `run` child command in cmd/debate/main.go. Bare run arguments are now parsed through a root runCmd parser, so `run` is task text rather than an explicit subcommand; added TestE2E_RunWordIsTaskNotCommand."
+      },
+      {
+        "id": "f_002",
+        "message": "The new max-rounds before/after test can pass even if --max-rounds is ignored.",
+        "severity": "medium",
+        "category": "quality",
+        "file": "cmd/debate/e2e_test.go",
+        "line": 126,
+        "blocking": true,
+        "status": "resolved",
+        "resolution": "Strengthened TestE2E_MaxRoundsFlagBeforeAndAfterTask in cmd/debate/e2e_test.go to use parseCLI and assert the forced trace contains exactly one full round, so the test fails if --max-rounds is ignored."
+      },
+      {
+        "id": "f_003",
+        "message": "The tests do not exercise the top-level Kong CLI path that main actually uses.",
+        "severity": "medium",
+        "category": "quality",
+        "file": "cmd/debate/main.go",
+        "line": 101,
+        "blocking": true,
+        "status": "resolved",
+        "resolution": "Updated representative run and new-command before/after flag tests to exercise parseCLI, the same top-level path used by main."
+      },
+      {
+        "id": "f_004",
+        "message": "Kong parse-error paths have no targeted regression tests.",
+        "severity": "low",
+        "category": "quality",
+        "file": "cmd/debate/main.go",
+        "line": 145,
+        "blocking": false,
+        "status": "open",
+        "resolution": ""
+      },
+      {
+        "id": "f_005",
+        "message": "The change introduces duplicate Kong parsing entrypoints outside the production CLI path.",
+        "severity": "low",
+        "category": "quality",
+        "file": "cmd/debate/main.go",
+        "line": 190,
+        "blocking": false,
+        "status": "open",
+        "resolution": ""
+      },
+      {
+        "id": "f_006",
+        "message": "The CLI docs still say `debate new` flags must come before the name, so the newly supported after-name form is undocumented.",
+        "severity": "low",
+        "category": "quality",
+        "file": "docs/DESIGN.md",
+        "line": 305,
+        "blocking": false,
+        "status": "open",
+        "resolution": ""
+      }
+    ],
+    "proposal_summary": {
+      "pending": 0,
+      "accepted": 6,
+      "rejected": 2
+    }
+  },
+  "decisions": [
+    {
+      "kind": "scope",
+      "text": "in scope: Add github.com/alecthomas/kong and parse cmd/debate arguments with it, removing the hand-rolled flag.FlagSet / os.Args switch parsing in cmd/debate/main.go and cmd/debate/scaffold.go."
+    },
+    {
+      "kind": "scope",
+      "text": "in scope: Model the debate run as kong's default command (bare `debate \"\u003ctask\u003e\"`) alongside the version, init, and new subcommands, with all flags as kong struct tags."
+    },
+    {
+      "kind": "scope",
+      "text": "in scope: Preserve the exact existing behavior (commands, flags, task composition, exit codes, stdout/stderr) and make flags parse in any position relative to positionals."
+    },
+    {
+      "kind": "scope",
+      "text": "in scope: Update the cmd/debate tests for kong, including assertions that flags work both before and after the positional argument."
+    },
+    {
+      "kind": "scope",
+      "text": "out of scope: Any change to internal/engine, internal/debate, or internal/backend."
+    },
+    {
+      "kind": "scope",
+      "text": "out of scope: Adding new subcommands (no validate) or new flags, or changing the backend resolver, runner, synthesizer, or IO contract."
+    },
+    {
+      "kind": "scope",
+      "text": "out of scope: Changing the debate algorithm, personas, or config."
+    },
+    {
+      "kind": "review_resolution",
+      "text": "f_001 resolved: The kong default run is still exposed as an explicit `run` subcommand, adding a command outside the approved CLI surface and changing task composition for tasks whose first unquoted word is `run`.; resolution: Removed the top-level Kong `run` child command in cmd/debate/main.go. Bare run arguments are now parsed through a root runCmd parser, so `run` is task text rather than an explicit subcommand; added TestE2E_RunWordIsTaskNotCommand."
+    },
+    {
+      "kind": "review_resolution",
+      "text": "f_002 resolved: The new max-rounds before/after test can pass even if --max-rounds is ignored.; resolution: Strengthened TestE2E_MaxRoundsFlagBeforeAndAfterTask in cmd/debate/e2e_test.go to use parseCLI and assert the forced trace contains exactly one full round, so the test fails if --max-rounds is ignored."
+    },
+    {
+      "kind": "review_resolution",
+      "text": "f_003 resolved: The tests do not exercise the top-level Kong CLI path that main actually uses.; resolution: Updated representative run and new-command before/after flag tests to exercise parseCLI, the same top-level path used by main."
+    },
+    {
+      "kind": "review_resolution",
+      "text": "proposal p_001 accepted as f_001"
+    },
+    {
+      "kind": "review_resolution",
+      "text": "proposal p_002 accepted as f_002"
+    },
+    {
+      "kind": "review_resolution",
+      "text": "proposal p_003 accepted as f_003"
+    },
+    {
+      "kind": "review_resolution",
+      "text": "proposal p_004 accepted as f_004"
+    },
+    {
+      "kind": "review_resolution",
+      "text": "proposal p_005 accepted as f_005"
+    },
+    {
+      "kind": "review_resolution",
+      "text": "proposal p_006 accepted as f_006"
+    },
+    {
+      "kind": "review_resolution",
+      "text": "proposal p_007 rejected: stale pre-existing docs for -t alias; contract preserves --task only"
+    },
+    {
+      "kind": "review_resolution",
+      "text": "proposal p_008 rejected: validate subcommand explicitly out of scope for this contract"
+    },
+    {
+      "kind": "validation",
+      "text": "bash scripts/check-gofmt.sh passed"
+    },
+    {
+      "kind": "validation",
+      "text": "go build ./... passed"
+    },
+    {
+      "kind": "validation",
+      "text": "go test -count=1 ./... passed"
+    },
+    {
+      "kind": "validation",
+      "text": "go vet ./... passed"
+    },
+    {
+      "kind": "validation",
+      "text": "go run ./cmd/debate version passed"
+    },
+    {
+      "kind": "validation",
+      "text": "bash scripts/dep-guard.sh ./internal/engine/... github.com/heurema/debate/internal/engine passed"
+    },
+    {
+      "kind": "validation",
+      "text": "bash scripts/dep-guard.sh ./internal/backend/... github.com/heurema/debate/internal/engine github.com/heurema/debate/internal/backend github.com/coder/acp-go-sdk passed"
+    },
+    {
+      "kind": "validation",
+      "text": "bash scripts/dep-guard.sh ./internal/debate/... github.com/heurema/debate/internal/engine github.com/heurema/debate/internal/debate gopkg.in/yaml.v3 passed"
+    }
+  ],
+  "artifacts": {
+    "contract": "contract/contract.json",
+    "gate_report": "gate/gate-report.json",
+    "review": "review/review.json",
+    "findings": "review/findings.jsonl",
+    "resolutions": "review/resolutions.jsonl",
+    "proposals": "review/proposals.jsonl",
+    "proposal_decisions": "review/proposal-decisions.jsonl"
+  }
+}

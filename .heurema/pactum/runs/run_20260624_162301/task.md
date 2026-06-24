@@ -1,0 +1,5 @@
+# Task
+
+Replace the hand-written stdlib flag parsing in cmd/debate with the kong library (github.com/alecthomas/kong, the same CLI library pactum uses), fixing the bug where flags placed after a positional argument are ignored. Preserve all existing behavior: the bare-task run form debate "<task>", the subcommands version/init/new <name>, all run flags (--with, --synth, --max-rounds, --json, -q/--quiet, --sealed, --task @file) and the new --role flag, the task composition (positional / --task @file / stdin appended), the exit codes (0 settled, 2 not-converged, 1 error), and the stdout=answer / stderr=trace contract. The only behavioral change is that flags now parse correctly in any position (before or after the positional). Model the debate run as kong's default command so the bare task keeps working alongside the subcommands. Add kong to go.mod and update the cmd/debate tests, asserting flags work both before and after the positional. Out of scope: internal/engine, internal/debate, internal/backend, adding new subcommands (no validate), and changing the resolver/runner/synthesizer/IO contracts.
+
+Generated: 2026-06-24T16:23:01Z

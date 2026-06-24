@@ -1,0 +1,22 @@
+{
+  "schema": "pactum.run.v1alpha1",
+  "run_id": "run_20260624_162301",
+  "status": "contract_approved",
+  "task": "Replace the hand-written stdlib flag parsing in cmd/debate with the kong library (github.com/alecthomas/kong, the same CLI library pactum uses), fixing the bug where flags placed after a positional argument are ignored. Preserve all existing behavior: the bare-task run form debate \"\u003ctask\u003e\", the subcommands version/init/new \u003cname\u003e, all run flags (--with, --synth, --max-rounds, --json, -q/--quiet, --sealed, --task @file) and the new --role flag, the task composition (positional / --task @file / stdin appended), the exit codes (0 settled, 2 not-converged, 1 error), and the stdout=answer / stderr=trace contract. The only behavioral change is that flags now parse correctly in any position (before or after the positional). Model the debate run as kong's default command so the bare task keeps working alongside the subcommands. Add kong to go.mod and update the cmd/debate tests, asserting flags work both before and after the positional. Out of scope: internal/engine, internal/debate, internal/backend, adding new subcommands (no validate), and changing the resolver/runner/synthesizer/IO contracts.",
+  "created_at": "2026-06-24T16:23:01.919302Z",
+  "updated_at": "2026-06-24T16:27:41.859943Z",
+  "repo_root": ".",
+  "workspace": ".heurema/pactum",
+  "map_run_id": "map_20260624_161537",
+  "artifacts": {
+    "task": "task.md",
+    "repo_context": "context/repo-context.md",
+    "search_results": "context/search-results.json",
+    "executor_context": "context/executor-context.md",
+    "contract_json": "contract/contract.json",
+    "contract_md": "contract/contract.md",
+    "prompt": "contract/prompt.md",
+    "prompt_manifest": "contract/prompt-manifest.json",
+    "approval": "contract/approval.json"
+  }
+}

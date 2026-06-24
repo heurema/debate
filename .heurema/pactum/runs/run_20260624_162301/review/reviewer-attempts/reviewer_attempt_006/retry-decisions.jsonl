@@ -1,0 +1,2 @@
+{"schema":"pactum.agent_retry_decision.v1alpha1","stage":"review","attempt_id":"reviewer_attempt_006","kind":"server_error","reason":"ACP internal error (code -32603)","retryable":true,"read_only":true,"attempt_number":1,"delay_ms":921}
+{"schema":"pactum.agent_retry_decision.v1alpha1","stage":"review","attempt_id":"reviewer_attempt_006","kind":"empty_output","reason":"transport returned no output","retryable":true,"read_only":true,"attempt_number":2,"delay_ms":1009}
