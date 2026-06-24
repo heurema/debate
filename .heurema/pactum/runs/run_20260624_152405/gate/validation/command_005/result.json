@@ -1,0 +1,12 @@
+{
+  "schema": "pactum.validation_command_result.v1alpha1",
+  "id": "command_005",
+  "command": "go run ./cmd/debate version",
+  "started_at": "2026-06-24T15:33:18.97857Z",
+  "finished_at": "2026-06-24T15:33:19.356061Z",
+  "duration_ms": 377,
+  "exit_code": 0,
+  "timed_out": false,
+  "stdout": "gate/validation/command_005/stdout.log",
+  "stderr": "gate/validation/command_005/stderr.log"
+}
