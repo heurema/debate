@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/heurema/debate/internal/backend/acp"
+	"github.com/heurema/debate/internal/backend/exec"
 	"github.com/heurema/debate/internal/debate/runner"
 	"github.com/heurema/debate/internal/engine/orchestrate"
 	"github.com/heurema/debate/internal/engine/transport"
@@ -52,6 +53,8 @@ func defaultResolver(backend string) (transport.Transport, error) {
 		return echo.New(), nil
 	case acp.BackendClaude, acp.BackendCodex:
 		return acp.New(backend, os.Getenv, nil)
+	case exec.BackendAgy:
+		return exec.New(backend, os.Getenv, nil)
 	default:
 		return nil, fmt.Errorf("unknown backend %q", backend)
 	}

@@ -63,9 +63,9 @@ func makeUnimplementedWorkspace(t *testing.T) string {
 	if err := os.MkdirAll(personasDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// backend: agy is not yet implemented and unknown to defaultResolver.
+	// backend: api is not yet implemented and unknown to defaultResolver.
 	path := filepath.Join(personasDir, "agent.md")
-	content := "---\nmodel: agy-model-1\neffort: low\nbackend: agy\n---\nYou are a debate participant.\n"
+	content := "---\nmodel: api-model-1\neffort: low\nbackend: api\n---\nYou are a debate participant.\n"
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -186,10 +186,10 @@ func TestE2E_UnimplementedBackend_Exit1(t *testing.T) {
 	}
 }
 
-// TestDefaultResolver_ACPBackendsResolve asserts that claude-agent-acp and codex-acp
+// TestDefaultResolver_ACPBackendsResolve asserts that claude-agent-acp, codex-acp, and agy
 // resolve to a transport.Transport in the default resolver without opening a real session.
 func TestDefaultResolver_ACPBackendsResolve(t *testing.T) {
-	for _, backend := range []string{"claude-agent-acp", "codex-acp"} {
+	for _, backend := range []string{"claude-agent-acp", "codex-acp", "agy"} {
 		tr, err := defaultResolver(backend)
 		if err != nil {
 			t.Errorf("defaultResolver(%q): %v", backend, err)
