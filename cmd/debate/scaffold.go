@@ -6,8 +6,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
-	"github.com/alecthomas/kong"
 	"github.com/heurema/debate/internal/debate/config"
 )
 
@@ -66,11 +66,8 @@ func (c *newCmd) Run(deps *cliDeps) error {
 // cmdInit implements the "debate init" subcommand.
 // It scaffolds a .heurema/debate workspace under workDir, skipping files that already exist.
 func cmdInit(args []string, stdout, stderr io.Writer, workDir string) int {
-	var cmd initCmd
-	if code, ok := parseStandaloneCommand(&cmd, "debate init", args, stdout, stderr, workDir); !ok {
-		return code
-	}
-	return runInit(&cmd, stdout, stderr, workDir)
+	cliArgs := append([]string{"init"}, args...)
+	return parseCLI(cliArgs, stdout, stderr, strings.NewReader(""), false, os.Getenv, defaultResolver, workDir)
 }
 
 func runInit(cmd *initCmd, stdout, stderr io.Writer, workDir string) int {
@@ -115,40 +112,11 @@ func printInitUsage(stderr io.Writer) {
 	fmt.Fprintln(stderr, "  Scaffold a .heurema/debate workspace in the current directory.")
 }
 
-func parseStandaloneCommand(cmd any, name string, args []string, stdout, stderr io.Writer, workDir string) (int, bool) {
-	parser, err := kong.New(cmd,
-		kong.Name(name),
-		kong.Writers(stderr, stderr),
-		kong.ShortUsageOnError(),
-		kong.Exit(func(code int) { panic(kongExit(code)) }),
-	)
-	if err != nil {
-		fmt.Fprintln(stderr, "error:", err)
-		return 1, false
-	}
-	var parseErr error
-	if code, ok := catchKongExit(func() {
-		_, parseErr = parser.Parse(args)
-	}); ok {
-		return code, false
-	}
-	if parseErr != nil {
-		_, _ = catchKongExit(func() {
-			parser.FatalIfErrorf(parseErr)
-		})
-		return 1, false
-	}
-	return 0, true
-}
-
 // cmdNew implements the "debate new <name>" subcommand.
 // It creates a persona file template under the discovered .heurema/debate/personas.
 func cmdNew(args []string, stdout, stderr io.Writer, workDir string) int {
-	cmd := newCmd{Role: "debater"}
-	if code, ok := parseStandaloneCommand(&cmd, "debate new", args, stdout, stderr, workDir); !ok {
-		return code
-	}
-	return runNew(&cmd, stdout, stderr, workDir)
+	cliArgs := append([]string{"new"}, args...)
+	return parseCLI(cliArgs, stdout, stderr, strings.NewReader(""), false, os.Getenv, defaultResolver, workDir)
 }
 
 func runNew(cmd *newCmd, stdout, stderr io.Writer, workDir string) int {

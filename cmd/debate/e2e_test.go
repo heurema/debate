@@ -192,6 +192,31 @@ func TestE2E_RunWordIsTaskNotCommand(t *testing.T) {
 	}
 }
 
+func TestCLI_UnknownFlagReportsUsage(t *testing.T) {
+	workDir := makeE2EWorkspace(t)
+	var stdout, stderr bytes.Buffer
+
+	code := parseCLI(
+		[]string{"--definitely-not-a-flag", "task"},
+		&stdout, &stderr, strings.NewReader(""),
+		false, noEnv, echoAll, workDir,
+	)
+
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	errText := stderr.String()
+	if !strings.Contains(errText, "--definitely-not-a-flag") {
+		t.Fatalf("stderr missing unknown flag: %q", errText)
+	}
+	if !strings.Contains(errText, "Usage:") {
+		t.Fatalf("stderr missing usage text: %q", errText)
+	}
+}
+
 // (c) non-TTY environment without DEBATE_FORCE_TRACE produces empty stderr.
 func TestE2E_NonTTY_NoTrace(t *testing.T) {
 	workDir := makeE2EWorkspace(t)
