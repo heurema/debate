@@ -1,0 +1,248 @@
+{
+  "schema": "pactum.memory_candidate.v1alpha1",
+  "run_id": "run_20260624_132440",
+  "created_at": "2026-06-24T19:19:43Z",
+  "source": "deterministic",
+  "status": "proposed",
+  "freshness_pin": {
+    "schema": "pactum.memory_freshness_pin.v1alpha1",
+    "review_state_sha256": "539a68f80723d18a3be1188b04a970a7b228b37b6e4d30cc0b3554b1446a3cb3"
+  },
+  "contract": {
+    "goal": "Add debate init and debate new scaffolding subcommands to cmd/debate that create a ready-to-run .heurema/debate workspace and new persona files, adding no new module dependency, without changing internal/engine, internal/debate, or internal/backend.",
+    "in_scope": [
+      "Implement the `debate init` subcommand: scaffold a .heurema/debate workspace under the current directory with two starter debater personas and a context.md template, safely (never overwriting existing files).",
+      "Implement the `debate new \u003cname\u003e` subcommand: create a new persona file from a template under a discovered .heurema/debate/personas, with a role flag, safely (never overwriting an existing persona).",
+      "Make the scaffolded workspace immediately loadable and runnable (valid personas that load via the existing config/persona packages).",
+      "Add deterministic unit tests using temporary directories that assert init and new behavior, including the loadability of the scaffolded workspace and the refuse-to-overwrite behavior."
+    ],
+    "out_of_scope": [
+      "Any change to internal/engine, internal/debate, or internal/backend source (the subcommands live in cmd/debate and reuse config/persona by import only).",
+      "Backends, the debate run path, the synthesizer, or convergence behavior.",
+      "Editing or migrating an existing workspace's content beyond adding new files; and any new third-party module dependency."
+    ],
+    "acceptance_criteria": [
+      "`debate init` creates a .heurema/debate directory under the current working directory containing personas/proposer.md and personas/skeptic.md (each a valid debater persona with role debater, a concrete model and effort, and a system-prompt body) and a context.md template file; it prints the paths it created.",
+      "The scaffolded workspace loads successfully via the existing config.Load: discovery finds the new .heurema/debate, the panel resolves to the two starter debaters, and the built-in default synthesizer is used (init does not scaffold a synthesizer file or a config.yml, since the default panel is all debater personas).",
+      "The two starter personas use concrete valid values (a real model id such as claude-haiku-4-5 and a valid effort) so the workspace is immediately runnable without edits; persona.ParseFile accepts both.",
+      "`debate init` is safe: if a target file already exists it does not overwrite it (it skips that file with a clear message or refuses with a clear error and a documented exit code); an existing .heurema/debate is never clobbered.",
+      "`debate new \u003cname\u003e` creates \u003cname\u003e.md under the discovered .heurema/debate/personas from a template with YAML frontmatter (role defaulting to debater, overridable via --role debater|synthesizer; a concrete model and effort default; optional backend) and a placeholder body; it prints the created path, and the created file is accepted by persona.ParseFile.",
+      "`debate new` validates the name (a simple persona id, rejecting path separators) and refuses to overwrite an existing persona file with a clear error; it requires a discoverable .heurema/debate workspace (walking up parent directories like config discovery) and errors clearly when none is found, creating the personas directory within the discovered workspace if it does not yet exist.",
+      "init and new write only under .heurema/debate, never outside it, use the Go standard library plus the existing internal packages, and add no new module dependency (go.mod and go.sum are unchanged); an unknown flag or a missing required argument prints a clear usage error with a non-zero exit.",
+      "Deterministic unit tests using temporary directories assert: init creates a workspace that config.Load accepts with the two-debater panel, re-running init does not overwrite existing files, new creates a persona that persona.ParseFile accepts, and new refuses to overwrite an existing persona; check-gofmt, go vet ./..., go build ./..., and go test ./... pass."
+    ],
+    "validation_commands": [
+      "bash scripts/check-gofmt.sh",
+      "go build ./...",
+      "go test -count=1 ./...",
+      "go vet ./...",
+      "go run ./cmd/debate version",
+      "git diff --exit-code -- go.mod go.sum",
+      "bash scripts/dep-guard.sh ./internal/engine/... github.com/heurema/debate/internal/engine",
+      "bash scripts/dep-guard.sh ./internal/debate/... github.com/heurema/debate/internal/engine github.com/heurema/debate/internal/debate gopkg.in/yaml.v3"
+    ]
+  },
+  "outcome": {
+    "gate_status": "needs_review",
+    "review_status": "approved",
+    "execution_exit_code": 0,
+    "validation_passed": true,
+    "changes_need_review": true
+  },
+  "changes": {
+    "changed_files": [
+      "cmd/debate/main.go"
+    ],
+    "new_files": [
+      "cmd/debate/scaffold.go",
+      "cmd/debate/scaffold_test.go"
+    ],
+    "missing_files": []
+  },
+  "clarifications": [],
+  "review": {
+    "findings": [
+      {
+        "id": "f_001",
+        "message": "writeIfAbsent does not remove the file it just created if WriteString fails. Because os.OpenFile with O_CREATE|O_EXCL has already created the (now empty or partially written) file on disk before the write error, a subsequent re-run of `debate init`/`debate new` sees the file as existing and reports 'skipped (already exists)' rather than retrying — leaving a corrupt persona that config.Load / persona.ParseFile will reject (empty body or truncated frontmatter), making the workspace unloadable until the user manually deletes the stray file.",
+        "severity": "low",
+        "category": "correctness",
+        "file": "cmd/debate/scaffold.go",
+        "line": 185,
+        "blocking": false,
+        "status": "open",
+        "resolution": ""
+      },
+      {
+        "id": "f_002",
+        "message": "TestCmdNew_RejectsPathSeparators does not actually verify path-separator/name validation. It runs in a bare t.TempDir() with no .heurema/debate workspace, so config.Discover fails for every input. Because validatePersonaName (scaffold.go:117) runs before config.Discover (scaffold.go:127) but the test only asserts code != 0 and never inspects stderr, the non-zero exit is guaranteed by the missing-workspace path regardless of name validation. The test would still pass if validatePersonaName were a no-op, giving false confidence in the path-traversal protection.",
+        "severity": "medium",
+        "category": "quality",
+        "file": "cmd/debate/scaffold_test.go",
+        "line": 169,
+        "blocking": false,
+        "status": "open",
+        "resolution": ""
+      },
+      {
+        "id": "f_003",
+        "message": "No test asserts that `debate init` creates context.md. config.Load swallows a missing context.md (os.ErrNotExist is treated as empty context, config.go:90-93), so TestCmdInit_CreatesWorkspaceThatLoads passing does not prove context.md exists. The acceptance criterion requires init to scaffold a context.md template, but its creation is unverified.",
+        "severity": "low",
+        "category": "validation",
+        "file": "cmd/debate/scaffold_test.go",
+        "line": 44,
+        "blocking": false,
+        "status": "open",
+        "resolution": ""
+      },
+      {
+        "id": "f_004",
+        "message": "The 'too many positional arguments' error path in cmdNew (scaffold.go:110-114) has no test. cmdNew explicitly handles fs.NArg() \u003e 1 with a distinct error and exit code, but no test passes more than one positional argument.",
+        "severity": "low",
+        "category": "validation",
+        "file": "cmd/debate/scaffold_test.go",
+        "line": 206,
+        "blocking": false,
+        "status": "open",
+        "resolution": ""
+      },
+      {
+        "id": "f_005",
+        "message": "outcomeString is a no-op: every switch branch (including default) returns the input reason unchanged, so the function is an identity wrapper with a meaningless switch. It adds indirection without behavior.",
+        "severity": "low",
+        "category": "quality",
+        "file": "cmd/debate/main.go",
+        "line": 199,
+        "blocking": false,
+        "status": "open",
+        "resolution": ""
+      },
+      {
+        "id": "f_006",
+        "message": "docs/DESIGN.md §7 and docs/SLICES.md §7 state that `debate init` scaffolds a `config.yml`, but the implemented init creates only personas/proposer.md, personas/skeptic.md, and context.md (no config.yml). The user-facing CLI reference now misdescribes what `init` produces.",
+        "severity": "low",
+        "category": "other",
+        "file": "docs/DESIGN.md",
+        "line": 306,
+        "blocking": false,
+        "status": "open",
+        "resolution": ""
+      },
+      {
+        "id": "f_007",
+        "message": "docs/DESIGN.md:307 documents `debate new \u003cname\u003e [--tags ...]`, but the implemented subcommand exposes `--role debater|synthesizer` and has no `--tags` flag. The actually-supported `--role` flag is undocumented in the CLI reference.",
+        "severity": "low",
+        "category": "other",
+        "file": "docs/DESIGN.md",
+        "line": 307,
+        "blocking": false,
+        "status": "open",
+        "resolution": ""
+      }
+    ],
+    "proposal_summary": {
+      "pending": 0,
+      "accepted": 7,
+      "rejected": 0
+    }
+  },
+  "decisions": [
+    {
+      "kind": "scope",
+      "text": "in scope: Implement the `debate init` subcommand: scaffold a .heurema/debate workspace under the current directory with two starter debater personas and a context.md template, safely (never overwriting existing files)."
+    },
+    {
+      "kind": "scope",
+      "text": "in scope: Implement the `debate new \u003cname\u003e` subcommand: create a new persona file from a template under a discovered .heurema/debate/personas, with a role flag, safely (never overwriting an existing persona)."
+    },
+    {
+      "kind": "scope",
+      "text": "in scope: Make the scaffolded workspace immediately loadable and runnable (valid personas that load via the existing config/persona packages)."
+    },
+    {
+      "kind": "scope",
+      "text": "in scope: Add deterministic unit tests using temporary directories that assert init and new behavior, including the loadability of the scaffolded workspace and the refuse-to-overwrite behavior."
+    },
+    {
+      "kind": "scope",
+      "text": "out of scope: Any change to internal/engine, internal/debate, or internal/backend source (the subcommands live in cmd/debate and reuse config/persona by import only)."
+    },
+    {
+      "kind": "scope",
+      "text": "out of scope: Backends, the debate run path, the synthesizer, or convergence behavior."
+    },
+    {
+      "kind": "scope",
+      "text": "out of scope: Editing or migrating an existing workspace's content beyond adding new files; and any new third-party module dependency."
+    },
+    {
+      "kind": "review_resolution",
+      "text": "proposal p_001 accepted as f_001"
+    },
+    {
+      "kind": "review_resolution",
+      "text": "proposal p_002 accepted as f_002"
+    },
+    {
+      "kind": "review_resolution",
+      "text": "proposal p_003 accepted as f_003"
+    },
+    {
+      "kind": "review_resolution",
+      "text": "proposal p_004 accepted as f_004"
+    },
+    {
+      "kind": "review_resolution",
+      "text": "proposal p_005 accepted as f_005"
+    },
+    {
+      "kind": "review_resolution",
+      "text": "proposal p_006 accepted as f_006"
+    },
+    {
+      "kind": "review_resolution",
+      "text": "proposal p_007 accepted as f_007"
+    },
+    {
+      "kind": "validation",
+      "text": "bash scripts/check-gofmt.sh passed"
+    },
+    {
+      "kind": "validation",
+      "text": "go build ./... passed"
+    },
+    {
+      "kind": "validation",
+      "text": "go test -count=1 ./... passed"
+    },
+    {
+      "kind": "validation",
+      "text": "go vet ./... passed"
+    },
+    {
+      "kind": "validation",
+      "text": "go run ./cmd/debate version passed"
+    },
+    {
+      "kind": "validation",
+      "text": "git diff --exit-code -- go.mod go.sum passed"
+    },
+    {
+      "kind": "validation",
+      "text": "bash scripts/dep-guard.sh ./internal/engine/... github.com/heurema/debate/internal/engine passed"
+    },
+    {
+      "kind": "validation",
+      "text": "bash scripts/dep-guard.sh ./internal/debate/... github.com/heurema/debate/internal/engine github.com/heurema/debate/internal/debate gopkg.in/yaml.v3 passed"
+    }
+  ],
+  "artifacts": {
+    "contract": "contract/contract.json",
+    "gate_report": "gate/gate-report.json",
+    "review": "review/review.json",
+    "findings": "review/findings.jsonl",
+    "resolutions": "review/resolutions.jsonl",
+    "proposals": "review/proposals.jsonl",
+    "proposal_decisions": "review/proposal-decisions.jsonl"
+  }
+}

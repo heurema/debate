@@ -1,0 +1,159 @@
+{
+  "schema": "pactum.memory_candidate.v1alpha1",
+  "run_id": "run_20260624_152405",
+  "created_at": "2026-06-24T19:19:43Z",
+  "source": "deterministic",
+  "status": "proposed",
+  "freshness_pin": {
+    "schema": "pactum.memory_freshness_pin.v1alpha1",
+    "review_state_sha256": "b53e6d678d8f7e1e13c441be1976c3f949c725948e3694723070b73f0114ef3d"
+  },
+  "contract": {
+    "goal": "Remove the context.md baseline-preamble feature so debate context lives only in the task (plus the grounded sandbox): drop config.Workspace.Context and context.md loading, assemble the brief from the task alone, and stop scaffolding context.md in debate init.",
+    "in_scope": [
+      "Drop the Context field from config.Workspace and stop reading .heurema/debate/context.md in internal/debate/config.",
+      "Make internal/debate/runner assemble the debate brief from the task alone and remove every use of Workspace.Context in the runner and synthesizer.",
+      "Make debate init in cmd/debate scaffold only the two starter debater personas and no longer create a context.md file.",
+      "Update all affected tests so none assert context.md creation or a Workspace.Context field."
+    ],
+    "out_of_scope": [
+      "Any change to grounding, the backends, personas, or the engine.",
+      "Docs updates (DESIGN.md / SLICES.md) — handled separately.",
+      "Introducing any new dependency or new feature."
+    ],
+    "acceptance_criteria": [
+      "config.Workspace no longer has a Context field, and config.Load no longer opens or reads .heurema/debate/context.md; a context.md present in a workspace is ignored and does not affect loading or cause an error.",
+      "internal/debate/runner assembles the debate brief from the task text alone (no context preamble), and neither the runner nor the synthesizer references Workspace.Context.",
+      "`debate init` scaffolds only personas/proposer.md and personas/skeptic.md under .heurema/debate and does not create a context.md file; it prints only the persona paths it created.",
+      "The scaffolded workspace still loads via config.Load with the two-debater panel and the built-in default synthesizer.",
+      "All affected tests are updated: no test asserts context.md creation or a Workspace.Context field; the init test asserts the two persona files are created and the workspace loads (two-debater panel) with no context.md; the runner test asserts the assembled brief equals the task.",
+      "check-gofmt, go build ./..., go vet ./..., and go test ./... pass; go.mod and go.sum are unchanged (no new dependency); the engine and debate dep-guards still pass."
+    ],
+    "validation_commands": [
+      "bash scripts/check-gofmt.sh",
+      "go build ./...",
+      "go test -count=1 ./...",
+      "go vet ./...",
+      "go run ./cmd/debate version",
+      "git diff --exit-code -- go.mod go.sum",
+      "bash scripts/dep-guard.sh ./internal/engine/... github.com/heurema/debate/internal/engine",
+      "bash scripts/dep-guard.sh ./internal/debate/... github.com/heurema/debate/internal/engine github.com/heurema/debate/internal/debate gopkg.in/yaml.v3"
+    ]
+  },
+  "outcome": {
+    "gate_status": "needs_review",
+    "review_status": "approved",
+    "execution_exit_code": 0,
+    "validation_passed": true,
+    "changes_need_review": true
+  },
+  "changes": {
+    "changed_files": [
+      "cmd/debate/e2e_test.go",
+      "cmd/debate/scaffold.go",
+      "cmd/debate/scaffold_test.go",
+      "internal/debate/config/config.go",
+      "internal/debate/config/config_test.go",
+      "internal/debate/runner/runner.go",
+      "internal/debate/runner/runner_test.go"
+    ],
+    "new_files": [],
+    "missing_files": []
+  },
+  "clarifications": [],
+  "review": {
+    "findings": [
+      {
+        "id": "f_001",
+        "message": "The doc comment on config.Load is now stale: it still says Load 'then loads config, context, and personas', but context.md loading was removed by this change. The inline step-number comments inside Load were also only partially renumbered ('// 3. Parse personas' is followed by '// 5. Resolve panel' and '// 6. Resolve synthesizer'), so the sequence now skips 4.",
+        "severity": "low",
+        "category": "quality",
+        "file": "internal/debate/config/config.go",
+        "line": 61,
+        "blocking": false,
+        "status": "open",
+        "resolution": ""
+      }
+    ],
+    "proposal_summary": {
+      "pending": 0,
+      "accepted": 1,
+      "rejected": 0
+    }
+  },
+  "decisions": [
+    {
+      "kind": "scope",
+      "text": "in scope: Drop the Context field from config.Workspace and stop reading .heurema/debate/context.md in internal/debate/config."
+    },
+    {
+      "kind": "scope",
+      "text": "in scope: Make internal/debate/runner assemble the debate brief from the task alone and remove every use of Workspace.Context in the runner and synthesizer."
+    },
+    {
+      "kind": "scope",
+      "text": "in scope: Make debate init in cmd/debate scaffold only the two starter debater personas and no longer create a context.md file."
+    },
+    {
+      "kind": "scope",
+      "text": "in scope: Update all affected tests so none assert context.md creation or a Workspace.Context field."
+    },
+    {
+      "kind": "scope",
+      "text": "out of scope: Any change to grounding, the backends, personas, or the engine."
+    },
+    {
+      "kind": "scope",
+      "text": "out of scope: Docs updates (DESIGN.md / SLICES.md) — handled separately."
+    },
+    {
+      "kind": "scope",
+      "text": "out of scope: Introducing any new dependency or new feature."
+    },
+    {
+      "kind": "review_resolution",
+      "text": "proposal p_001 accepted as f_001"
+    },
+    {
+      "kind": "validation",
+      "text": "bash scripts/check-gofmt.sh passed"
+    },
+    {
+      "kind": "validation",
+      "text": "go build ./... passed"
+    },
+    {
+      "kind": "validation",
+      "text": "go test -count=1 ./... passed"
+    },
+    {
+      "kind": "validation",
+      "text": "go vet ./... passed"
+    },
+    {
+      "kind": "validation",
+      "text": "go run ./cmd/debate version passed"
+    },
+    {
+      "kind": "validation",
+      "text": "git diff --exit-code -- go.mod go.sum passed"
+    },
+    {
+      "kind": "validation",
+      "text": "bash scripts/dep-guard.sh ./internal/engine/... github.com/heurema/debate/internal/engine passed"
+    },
+    {
+      "kind": "validation",
+      "text": "bash scripts/dep-guard.sh ./internal/debate/... github.com/heurema/debate/internal/engine github.com/heurema/debate/internal/debate gopkg.in/yaml.v3 passed"
+    }
+  ],
+  "artifacts": {
+    "contract": "contract/contract.json",
+    "gate_report": "gate/gate-report.json",
+    "review": "review/review.json",
+    "findings": "review/findings.jsonl",
+    "resolutions": "review/resolutions.jsonl",
+    "proposals": "review/proposals.jsonl",
+    "proposal_decisions": "review/proposal-decisions.jsonl"
+  }
+}
