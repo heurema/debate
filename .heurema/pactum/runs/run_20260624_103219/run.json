@@ -1,0 +1,22 @@
+{
+  "schema": "pactum.run.v1alpha1",
+  "run_id": "run_20260624_103219",
+  "status": "contract_approved",
+  "task": "Slice 5: implement the ACP backend transport in internal/engine/transport/acp and wire it into the cmd/debate production resolver, so debate can run a real debate with Claude (backend claude-agent-acp) and Codex (backend codex-acp). The acp transport implements transport.Transport over the Agent Client Protocol: Open spawns the backend's ACP CLI subprocess, performs the ACP initialize and session/new handshake, and returns a Session holding the persistent subprocess and session id. Session.Send sends the prompt as a session/prompt request and returns the agent's final text as transport.Result; the session is persistent and reused across rounds. Grounding: the session runs with cwd as a read-only sandbox plus network (agent reads project files and the internet but must not mutate the filesystem); transport.Spec.ReadOnly (from --sealed) tightens to brief-only. Session.Close shuts down the subprocess. Errors map via transport.Classify and a dropped session recovers by reopening and replaying. Testing: a fake in-process ACP peer (speaking the protocol over pipes / an injected stream) drives deterministic unit tests of handshake, send, persistence, error classification, and recovery; a real-CLI integration test is gated behind a build tag and env var so the default test run needs no network or API key. The cmd/debate production resolver registers the acp transport for claude-agent-acp and codex-acp; the echo backend stays for offline use. Out of scope: the exec/agy backend, the api backend, and any change to engine/policy/config packages beyond import.",
+  "created_at": "2026-06-24T10:32:19.716297Z",
+  "updated_at": "2026-06-24T11:19:47.395612Z",
+  "repo_root": ".",
+  "workspace": ".heurema/pactum",
+  "map_run_id": "map_20260624_100801",
+  "artifacts": {
+    "task": "task.md",
+    "repo_context": "context/repo-context.md",
+    "search_results": "context/search-results.json",
+    "executor_context": "context/executor-context.md",
+    "contract_json": "contract/contract.json",
+    "contract_md": "contract/contract.md",
+    "prompt": "contract/prompt.md",
+    "prompt_manifest": "contract/prompt-manifest.json",
+    "approval": "contract/approval.json"
+  }
+}
