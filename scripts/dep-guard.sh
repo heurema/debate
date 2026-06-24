@@ -1,22 +1,37 @@
 #!/usr/bin/env bash
-# Enforce that internal/engine/... imports only stdlib and other internal/engine packages.
+# Enforce that a package pattern's non-stdlib dependencies are under allowed import prefixes.
+# Usage: dep-guard.sh <package-pattern> <allowed-prefix>...
 set -uo pipefail
 
-deps=$(go list -deps -test -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./internal/engine/... 2>&1)
+if [ "$#" -lt 2 ]; then
+    printf 'usage: dep-guard.sh <package-pattern> <allowed-prefix>...\n' >&2
+    exit 1
+fi
+
+pattern=$1
+shift
+
+deps=$(go list -deps -test -f '{{if not .Standard}}{{.ImportPath}}{{end}}' "$pattern" 2>&1)
 rc=$?
 if [ "$rc" -ne 0 ]; then
     printf '%s\n' "$deps" >&2
     exit "$rc"
 fi
 
-# Non-standard packages that are NOT under our engine path are forbidden.
-offending=$(printf '%s\n' "$deps" \
-    | grep -v '^$' \
-    | grep -v '^github\.com/heurema/debate/internal/engine' \
-    || true)
+offending=()
+while IFS= read -r dep; do
+    [ -z "$dep" ] && continue
+    ok=false
+    for prefix in "$@"; do
+        case "$dep" in
+            "${prefix}"*) ok=true; break ;;
+        esac
+    done
+    [ "$ok" = "false" ] && offending+=("$dep")
+done <<< "$deps"
 
-if [ -n "$offending" ]; then
-    printf 'dep-guard: forbidden dependencies in internal/engine/...:\n' >&2
-    printf '%s\n' "$offending" >&2
+if [ "${#offending[@]}" -gt 0 ]; then
+    printf 'dep-guard: forbidden dependencies in %s:\n' "$pattern" >&2
+    printf '%s\n' "${offending[@]}" >&2
     exit 1
 fi
