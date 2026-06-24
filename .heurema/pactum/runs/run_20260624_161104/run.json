@@ -1,0 +1,22 @@
+{
+  "schema": "pactum.run.v1alpha1",
+  "run_id": "run_20260624_161104",
+  "status": "contract_approved",
+  "task": "Fix the agy exec backend to invoke agy non-interactively. The real agy CLI defaults to an interactive session and only runs a single prompt non-interactively under --print (alias -p), so the current default argv [agy, --model, spec.Model] hangs against real agy. Change internal/backend/exec/exec.go so the default argv becomes [agy, --print, --model, spec.Model], keeping the prompt on stdin so agy prints the response and exits. The DEBATE_AGY_COMMAND override still replaces only argv[0] and preserves --print and --model. Update the affected unit tests (exec_test.go argv assertions) and the gated integration test to match the new argv. Out of scope: other backends, internal/engine, the stdin reconstruction/accumulation logic, and the acp backend.",
+  "created_at": "2026-06-24T16:11:04.323816Z",
+  "updated_at": "2026-06-24T16:15:23.654827Z",
+  "repo_root": ".",
+  "workspace": ".heurema/pactum",
+  "map_run_id": "map_20260624_152728",
+  "artifacts": {
+    "task": "task.md",
+    "repo_context": "context/repo-context.md",
+    "search_results": "context/search-results.json",
+    "executor_context": "context/executor-context.md",
+    "contract_json": "contract/contract.json",
+    "contract_md": "contract/contract.md",
+    "prompt": "contract/prompt.md",
+    "prompt_manifest": "contract/prompt-manifest.json",
+    "approval": "contract/approval.json"
+  }
+}

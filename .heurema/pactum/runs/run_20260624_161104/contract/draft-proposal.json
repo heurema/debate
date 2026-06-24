@@ -1,0 +1,42 @@
+{
+  "schema": "pactum.contract_draft_proposal.v1alpha1",
+  "run_id": "run_20260624_161104",
+  "status": "accepted",
+  "created_at": "2026-06-24T16:11:12Z",
+  "source": "drafter_attempt",
+  "drafter_attempt_id": "drafter_attempt_001",
+  "drafter": "codex",
+  "in_scope": [
+    "Change `internal/backend/exec/exec.go` so agy command resolution uses default argv `agy --print --model \u003cspec.Model\u003e`.",
+    "Keep the reconstructed prompt/context on stdin; do not pass prompt content as command-line arguments.",
+    "Preserve `DEBATE_AGY_COMMAND` as an override for argv[0] only, with `--print --model \u003cspec.Model\u003e` still present and ordered after it.",
+    "Update affected argv assertions in `internal/backend/exec/exec_test.go`.",
+    "Update the gated agy exec integration test in `internal/backend/exec/integration_test.go` to match the non-interactive `--print` invocation."
+  ],
+  "out_of_scope": [
+    "Changes to `internal/backend/acp` or any backend other than the agy exec backend.",
+    "Changes to `internal/engine` behavior.",
+    "Changes to stdin reconstruction, history accumulation, retry handling, cancellation handling, or stderr/error classification.",
+    "Changing `DEBATE_AGY_COMMAND` into a full command-string or extra-argument override."
+  ],
+  "acceptance": [
+    "For a spec with model `gemini-pro` and no override, a send invokes the command runner with name `agy` and args exactly `[\"--print\", \"--model\", \"gemini-pro\"]`.",
+    "For `DEBATE_AGY_COMMAND=/usr/local/bin/custom-agy` and model `gemini-flash`, a send invokes name `/usr/local/bin/custom-agy` and args exactly `[\"--print\", \"--model\", \"gemini-flash\"]`.",
+    "The stdin bytes produced for single-turn and multi-turn sends remain unchanged from the existing tested format.",
+    "The exec backend still rejects an empty `Spec.Model` before spawning a subprocess.",
+    "The build-tagged `TestIntegration_Agy` completes without hanging and returns non-empty content when `DEBATE_EXEC_INTEGRATION=1`, `AGY_MODEL` is set, and a real agy CLI is available."
+  ],
+  "validation": [
+    "go test ./internal/backend/exec -count=1",
+    "go test ./... -count=1",
+    "go test -tags exec_integration ./internal/backend/exec -run TestIntegration_Agy -count=1",
+    "DEBATE_EXEC_INTEGRATION=1 AGY_MODEL=$AGY_MODEL go test -tags exec_integration ./internal/backend/exec -run TestIntegration_Agy -count=1"
+  ],
+  "assumptions": [
+    "The real agy CLI accepts `--print --model \u003cmodel\u003e` and reads the prompt from stdin before printing one response and exiting.",
+    "`DEBATE_AGY_COMMAND` is intended to contain only an executable path or name, not additional flags.",
+    "The real integration validation may skip unless `DEBATE_EXEC_INTEGRATION`, `AGY_MODEL`, and an available agy CLI are provided."
+  ],
+  "accepted_at": "2026-06-24T16:12:46Z",
+  "accepted_by": "manual"
+}
