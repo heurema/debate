@@ -3,12 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 
+	"github.com/alecthomas/kong"
 	"github.com/heurema/debate/internal/backend/acp"
 	"github.com/heurema/debate/internal/backend/exec"
 	"github.com/heurema/debate/internal/debate/runner"
@@ -21,28 +21,8 @@ import (
 var Version = "dev"
 
 func main() {
-	if len(os.Args) >= 2 && os.Args[1] == "version" {
-		fmt.Println("debate", Version)
-		os.Exit(0)
-	}
-
-	workDir, err := os.Getwd()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "error: could not get working directory:", err)
-		os.Exit(1)
-	}
-
-	if len(os.Args) >= 2 {
-		switch os.Args[1] {
-		case "init":
-			os.Exit(cmdInit(os.Args[2:], os.Stdout, os.Stderr, workDir))
-		case "new":
-			os.Exit(cmdNew(os.Args[2:], os.Stdout, os.Stderr, workDir))
-		}
-	}
-
 	isTerminal := stderrIsTerminal()
-	code := parseAndRun(os.Args[1:], os.Stdout, os.Stderr, os.Stdin, isTerminal, os.Getenv, defaultResolver, workDir)
+	code := parseCLI(os.Args[1:], os.Stdout, os.Stderr, os.Stdin, isTerminal, os.Getenv, defaultResolver, "")
 	os.Exit(code)
 }
 
@@ -69,13 +49,151 @@ func defaultResolver(backend string) (transport.Transport, error) {
 	}
 }
 
-// stringSlice implements flag.Value for repeatable --with flags.
-type stringSlice []string
+type cli struct {
+	Version versionCmd `cmd:"" help:"Print the debate version."`
+	Init    initCmd    `cmd:"" help:"Scaffold a .heurema/debate workspace in the current directory."`
+	New     newCmd     `cmd:"" help:"Create a new persona file in the discovered .heurema/debate/personas."`
+}
 
-func (s *stringSlice) String() string { return strings.Join(*s, ",") }
-func (s *stringSlice) Set(v string) error {
-	*s = append(*s, v)
+type cliDeps struct {
+	stdout     io.Writer
+	stderr     io.Writer
+	stdin      io.Reader
+	isTerminal bool
+	getEnv     func(string) string
+	resolver   runner.Resolver
+	workDir    string
+	getWorkDir func() (string, error)
+	code       int
+}
+
+type runCmd struct {
+	With          []string `name:"with" help:"Persona id to include in panel. Repeatable."`
+	SynthOverride string   `name:"synth" help:"Override synthesizer persona id."`
+	TaskFlag      string   `name:"task" help:"Task text or @file (reads file content when prefixed with @)."`
+	MaxRounds     int      `name:"max-rounds" default:"10" help:"Maximum debate rounds."`
+	JSONOut       bool     `name:"json" help:"Write JSON result to stdout, suppress stderr trace."`
+	Quiet         bool     `name:"quiet" short:"q" help:"Suppress stderr debate trace."`
+	Sealed        bool     `name:"sealed" help:"Read-only intent threaded into transport specs."`
+	Task          []string `arg:"" optional:"" name:"task" help:"Task text."`
+}
+
+type versionCmd struct{}
+
+func (c *runCmd) Run(deps *cliDeps) error {
+	workDir, err := deps.resolveWorkDir()
+	if err != nil {
+		fmt.Fprintln(deps.stderr, "error: could not get working directory:", err)
+		deps.code = 1
+		return nil
+	}
+	deps.code = runDebate(c, deps.stdout, deps.stderr, deps.stdin, deps.isTerminal, deps.getEnv, deps.resolver, workDir)
 	return nil
+}
+
+func (versionCmd) Run(deps *cliDeps) error {
+	fmt.Fprintln(deps.stdout, "debate", Version)
+	deps.code = 0
+	return nil
+}
+
+func parseCLI(
+	args []string,
+	stdout, stderr io.Writer,
+	stdin io.Reader,
+	isTerminal bool,
+	getEnv func(string) string,
+	resolver runner.Resolver,
+	workDir string,
+) int {
+	if len(args) > 0 && isNamedCommand(args[0]) {
+		var app cli
+		return parseAndDispatch(&app, args, stdout, stderr, stdin, isTerminal, getEnv, resolver, workDir)
+	}
+	return parseAndRun(args, stdout, stderr, stdin, isTerminal, getEnv, resolver, workDir)
+}
+
+func isNamedCommand(arg string) bool {
+	switch arg {
+	case "version", "init", "new":
+		return true
+	default:
+		return false
+	}
+}
+
+func parseAndDispatch(
+	app any,
+	args []string,
+	stdout, stderr io.Writer,
+	stdin io.Reader,
+	isTerminal bool,
+	getEnv func(string) string,
+	resolver runner.Resolver,
+	workDir string,
+) int {
+	deps := &cliDeps{
+		stdout:     stdout,
+		stderr:     stderr,
+		stdin:      stdin,
+		isTerminal: isTerminal,
+		getEnv:     getEnv,
+		resolver:   resolver,
+		workDir:    workDir,
+		getWorkDir: os.Getwd,
+		code:       0,
+	}
+	parser, err := kong.New(app,
+		kong.Name("debate"),
+		kong.Writers(stderr, stderr),
+		kong.ShortUsageOnError(),
+		kong.Exit(func(code int) { panic(kongExit(code)) }),
+	)
+	if err != nil {
+		fmt.Fprintln(stderr, "error:", err)
+		return 1
+	}
+	var ctx *kong.Context
+	if code, ok := catchKongExit(func() {
+		ctx, err = parser.Parse(args)
+	}); ok {
+		return code
+	}
+	if err != nil {
+		_, _ = catchKongExit(func() {
+			parser.FatalIfErrorf(err)
+		})
+		return 1
+	}
+	if err := ctx.Run(deps); err != nil {
+		fmt.Fprintln(stderr, "error:", err)
+		return 1
+	}
+	return deps.code
+}
+
+type kongExit int
+
+func catchKongExit(fn func()) (code int, ok bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			exit, isExit := r.(kongExit)
+			if !isExit {
+				panic(r)
+			}
+			code = int(exit)
+			ok = true
+		}
+	}()
+	fn()
+	return 0, false
+}
+
+func (d *cliDeps) resolveWorkDir() (string, error) {
+	if d.workDir != "" {
+		return d.workDir, nil
+	}
+	return d.getWorkDir()
 }
 
 // parseAndRun parses debate flags, assembles the task, runs the debate, and writes output.
@@ -89,40 +207,20 @@ func parseAndRun(
 	resolver runner.Resolver,
 	workDir string,
 ) int {
-	var (
-		with          stringSlice
-		synthOverride string
-		taskFlag      string
-		maxRounds     int
-		jsonOut       bool
-		quiet         bool
-		sealed        bool
-	)
+	var cmd runCmd
+	return parseAndDispatch(&cmd, args, stdout, stderr, stdin, isTerminal, getEnv, resolver, workDir)
+}
 
-	fs := flag.NewFlagSet("debate", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: debate [flags] <task>")
-		fmt.Fprintln(stderr, "       debate version")
-		fmt.Fprintln(stderr)
-		fmt.Fprintln(stderr, "flags:")
-		fs.PrintDefaults()
-	}
-	fs.Var(&with, "with", "persona id to include in panel (repeatable)")
-	fs.StringVar(&synthOverride, "synth", "", "override synthesizer persona id")
-	fs.StringVar(&taskFlag, "task", "", "task text or @file (reads file content when prefixed with @)")
-	fs.IntVar(&maxRounds, "max-rounds", 10, "maximum debate rounds")
-	fs.BoolVar(&jsonOut, "json", false, "write JSON result to stdout, suppress stderr trace")
-	fs.BoolVar(&quiet, "q", false, "suppress stderr debate trace")
-	fs.BoolVar(&quiet, "quiet", false, "suppress stderr debate trace")
-	fs.BoolVar(&sealed, "sealed", false, "read-only intent threaded into transport specs")
-
-	if err := fs.Parse(args); err != nil {
-		// flag.ContinueOnError already printed the error and usage.
-		return 1
-	}
-
-	task, err := assembleTask(taskFlag, fs.Args(), stdin)
+func runDebate(
+	cmd *runCmd,
+	stdout, stderr io.Writer,
+	stdin io.Reader,
+	isTerminal bool,
+	getEnv func(string) string,
+	resolver runner.Resolver,
+	workDir string,
+) int {
+	task, err := assembleTask(cmd.TaskFlag, cmd.Task, stdin)
 	if err != nil {
 		fmt.Fprintln(stderr, "error:", err)
 		return 1
@@ -134,7 +232,7 @@ func parseAndRun(
 
 	// Trace to stderr when: not quiet, not JSON, and (it's a TTY or DEBATE_FORCE_TRACE=1).
 	forceTrace := getEnv("DEBATE_FORCE_TRACE") == "1"
-	traceEnabled := !quiet && !jsonOut && (isTerminal || forceTrace)
+	traceEnabled := !cmd.Quiet && !cmd.JSONOut && (isTerminal || forceTrace)
 
 	var onTurn func(orchestrate.Turn)
 	if traceEnabled {
@@ -145,11 +243,11 @@ func parseAndRun(
 
 	cfg := runner.Config{
 		WorkDir:       workDir,
-		WithList:      []string(with),
-		SynthOverride: synthOverride,
+		WithList:      cmd.With,
+		SynthOverride: cmd.SynthOverride,
 		Task:          task,
-		MaxRounds:     maxRounds,
-		Sealed:        sealed,
+		MaxRounds:     cmd.MaxRounds,
+		Sealed:        cmd.Sealed,
 		OnTurn:        onTurn,
 		Resolver:      resolver,
 	}
@@ -160,7 +258,7 @@ func parseAndRun(
 		return 1
 	}
 
-	if jsonOut {
+	if cmd.JSONOut {
 		type jsonTurn struct {
 			Round   int    `json:"round"`
 			Speaker string `json:"speaker"`

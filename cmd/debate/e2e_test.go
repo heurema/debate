@@ -123,6 +123,75 @@ func TestE2E_NotConverged_Exit2(t *testing.T) {
 	}
 }
 
+func TestE2E_MaxRoundsFlagBeforeAndAfterTask(t *testing.T) {
+	workDir := makeE2EWorkspace(t)
+	const notDoneContent = "I disagree.\n\n```signal\n" +
+		"{\"position\": \"disagree\", \"objections\": [\"needs work\"], \"done\": false}\n```"
+
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{name: "before", args: []string{"--max-rounds", "1", "controversial topic"}},
+		{name: "after", args: []string{"controversial topic", "--max-rounds", "1"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resolver := func(_ string) (transport.Transport, error) {
+				return mock.NewTransport(map[string]*mock.Session{
+					"alice":       mock.NewSession(notDoneScripts(5, notDoneContent)),
+					"bob":         mock.NewSession(notDoneScripts(5, notDoneContent)),
+					"synthesizer": mock.NewSession([]mock.ScriptedResult{{Result: transport.Result{Content: "synthesis"}}}),
+				}), nil
+			}
+
+			var stdout, stderr bytes.Buffer
+			code := parseCLI(
+				tc.args,
+				&stdout, &stderr, strings.NewReader(""),
+				false, forceTraceEnv, resolver, workDir,
+			)
+			if code != 2 {
+				t.Errorf("exit code = %d, want 2; stderr: %s", code, stderr.String())
+			}
+			if turns := strings.Count(stderr.String(), "[Round "); turns != 2 {
+				t.Errorf("trace turns = %d, want 2; stderr: %s", turns, stderr.String())
+			}
+		})
+	}
+}
+
+func TestE2E_RunWordIsTaskNotCommand(t *testing.T) {
+	workDir := makeE2EWorkspace(t)
+	const notDoneContent = "I disagree.\n\n```signal\n" +
+		"{\"position\": \"disagree\", \"objections\": [\"needs work\"], \"done\": false}\n```"
+	synth := mock.NewSession([]mock.ScriptedResult{{Result: transport.Result{Content: "synthesis"}}})
+	resolver := func(_ string) (transport.Transport, error) {
+		return mock.NewTransport(map[string]*mock.Session{
+			"alice":       mock.NewSession(notDoneScripts(1, notDoneContent)),
+			"bob":         mock.NewSession(notDoneScripts(1, notDoneContent)),
+			"synthesizer": synth,
+		}), nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := parseCLI(
+		[]string{"run", "--max-rounds", "1"},
+		&stdout, &stderr, strings.NewReader(""),
+		false, noEnv, resolver, workDir,
+	)
+
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2; stderr: %s", code, stderr.String())
+	}
+	prompts := synth.Prompts()
+	if len(prompts) != 1 {
+		t.Fatalf("synthesizer prompts = %d, want 1", len(prompts))
+	}
+	if !strings.Contains(prompts[0], "Task: run\n\n") {
+		t.Fatalf("synthesizer prompt does not contain task %q: %s", "run", prompts[0])
+	}
+}
+
 // (c) non-TTY environment without DEBATE_FORCE_TRACE produces empty stderr.
 func TestE2E_NonTTY_NoTrace(t *testing.T) {
 	workDir := makeE2EWorkspace(t)
@@ -227,6 +296,35 @@ func TestE2E_JSONOutput(t *testing.T) {
 	// No extra keys.
 	if len(out) != 4 {
 		t.Errorf("JSON has %d top-level keys, want 4; keys: %v", len(out), keysOf(out))
+	}
+}
+
+func TestE2E_JSONFlagBeforeAndAfterTask(t *testing.T) {
+	workDir := makeE2EWorkspace(t)
+
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{name: "before", args: []string{"--json", "a task"}},
+		{name: "after", args: []string{"a task", "--json"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := parseCLI(
+				tc.args,
+				&stdout, &stderr, strings.NewReader(""),
+				false, noEnv, echoAll, workDir,
+			)
+
+			if code != 0 {
+				t.Fatalf("exit code = %d; stderr: %s", code, stderr.String())
+			}
+			var out map[string]json.RawMessage
+			if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+				t.Fatalf("invalid JSON on stdout: %v\nraw: %s", err, stdout.String())
+			}
+		})
 	}
 }
 

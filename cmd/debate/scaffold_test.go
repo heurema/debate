@@ -153,6 +153,40 @@ func TestCmdNew_SynthesizerRole(t *testing.T) {
 	}
 }
 
+func TestCmdNew_RoleFlagBeforeAndAfterName(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		file string
+	}{
+		{name: "before", args: []string{"--role", "synthesizer", "before"}, file: "before.md"},
+		{name: "after", args: []string{"after", "--role", "synthesizer"}, file: "after.md"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			workDir := t.TempDir()
+			if code := cmdInit(nil, &bytes.Buffer{}, &bytes.Buffer{}, workDir); code != 0 {
+				t.Fatal("cmdInit failed")
+			}
+
+			args := append([]string{"new"}, tc.args...)
+			var errout bytes.Buffer
+			code := parseCLI(args, &bytes.Buffer{}, &errout, strings.NewReader(""), false, noEnv, echoAll, workDir)
+			if code != 0 {
+				t.Fatalf("cmdNew exit %d: stderr=%q", code, errout.String())
+			}
+
+			personaPath := filepath.Join(workDir, ".heurema", "debate", "personas", tc.file)
+			p, err := persona.ParseFile(personaPath)
+			if err != nil {
+				t.Fatalf("persona.ParseFile: %v", err)
+			}
+			if p.Role != "synthesizer" {
+				t.Errorf("Role = %q, want synthesizer", p.Role)
+			}
+		})
+	}
+}
+
 func TestCmdNew_RefusesOverwrite(t *testing.T) {
 	workDir := t.TempDir()
 	if code := cmdInit(nil, &bytes.Buffer{}, &bytes.Buffer{}, workDir); code != 0 {

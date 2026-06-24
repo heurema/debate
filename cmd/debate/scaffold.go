@@ -2,12 +2,12 @@ package main
 
 import (
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 
+	"github.com/alecthomas/kong"
 	"github.com/heurema/debate/internal/debate/config"
 )
 
@@ -32,21 +32,51 @@ effort: medium
 You are the Skeptic. Challenge the proposition by identifying weaknesses, counter-examples, and unresolved assumptions. Be constructive and specific.
 `
 
+type initCmd struct {
+	Args []string `arg:"" optional:"" name:"args" hidden:""`
+}
+
+type newCmd struct {
+	Role string   `name:"role" default:"debater" help:"Persona role (debater|synthesizer)."`
+	Name []string `arg:"" optional:"" name:"name" help:"Persona name."`
+}
+
+func (c *initCmd) Run(deps *cliDeps) error {
+	workDir, err := deps.resolveWorkDir()
+	if err != nil {
+		fmt.Fprintln(deps.stderr, "error: could not get working directory:", err)
+		deps.code = 1
+		return nil
+	}
+	deps.code = runInit(c, deps.stdout, deps.stderr, workDir)
+	return nil
+}
+
+func (c *newCmd) Run(deps *cliDeps) error {
+	workDir, err := deps.resolveWorkDir()
+	if err != nil {
+		fmt.Fprintln(deps.stderr, "error: could not get working directory:", err)
+		deps.code = 1
+		return nil
+	}
+	deps.code = runNew(c, deps.stdout, deps.stderr, workDir)
+	return nil
+}
+
 // cmdInit implements the "debate init" subcommand.
 // It scaffolds a .heurema/debate workspace under workDir, skipping files that already exist.
 func cmdInit(args []string, stdout, stderr io.Writer, workDir string) int {
-	fs := flag.NewFlagSet("debate init", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: debate init")
-		fmt.Fprintln(stderr, "  Scaffold a .heurema/debate workspace in the current directory.")
+	var cmd initCmd
+	if code, ok := parseStandaloneCommand(&cmd, "debate init", args, stdout, stderr, workDir); !ok {
+		return code
 	}
-	if err := fs.Parse(args); err != nil {
-		return 1
-	}
-	if fs.NArg() > 0 {
+	return runInit(&cmd, stdout, stderr, workDir)
+}
+
+func runInit(cmd *initCmd, stdout, stderr io.Writer, workDir string) int {
+	if len(cmd.Args) > 0 {
 		fmt.Fprintln(stderr, "error: debate init takes no arguments")
-		fs.Usage()
+		printInitUsage(stderr)
 		return 1
 	}
 
@@ -80,42 +110,67 @@ func cmdInit(args []string, stdout, stderr io.Writer, workDir string) int {
 	return 0
 }
 
+func printInitUsage(stderr io.Writer) {
+	fmt.Fprintln(stderr, "usage: debate init")
+	fmt.Fprintln(stderr, "  Scaffold a .heurema/debate workspace in the current directory.")
+}
+
+func parseStandaloneCommand(cmd any, name string, args []string, stdout, stderr io.Writer, workDir string) (int, bool) {
+	parser, err := kong.New(cmd,
+		kong.Name(name),
+		kong.Writers(stderr, stderr),
+		kong.ShortUsageOnError(),
+		kong.Exit(func(code int) { panic(kongExit(code)) }),
+	)
+	if err != nil {
+		fmt.Fprintln(stderr, "error:", err)
+		return 1, false
+	}
+	var parseErr error
+	if code, ok := catchKongExit(func() {
+		_, parseErr = parser.Parse(args)
+	}); ok {
+		return code, false
+	}
+	if parseErr != nil {
+		_, _ = catchKongExit(func() {
+			parser.FatalIfErrorf(parseErr)
+		})
+		return 1, false
+	}
+	return 0, true
+}
+
 // cmdNew implements the "debate new <name>" subcommand.
 // It creates a persona file template under the discovered .heurema/debate/personas.
 func cmdNew(args []string, stdout, stderr io.Writer, workDir string) int {
-	var role string
-
-	fs := flag.NewFlagSet("debate new", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	fs.StringVar(&role, "role", "debater", "persona role (debater|synthesizer)")
-	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: debate new [--role debater|synthesizer] <name>")
-		fmt.Fprintln(stderr, "  Create a new persona file in the discovered .heurema/debate/personas.")
-		fs.PrintDefaults()
+	cmd := newCmd{Role: "debater"}
+	if code, ok := parseStandaloneCommand(&cmd, "debate new", args, stdout, stderr, workDir); !ok {
+		return code
 	}
-	if err := fs.Parse(args); err != nil {
-		return 1
-	}
+	return runNew(&cmd, stdout, stderr, workDir)
+}
 
-	if fs.NArg() == 0 {
+func runNew(cmd *newCmd, stdout, stderr io.Writer, workDir string) int {
+	if len(cmd.Name) == 0 {
 		fmt.Fprintln(stderr, "error: debate new requires a persona name")
-		fs.Usage()
+		printNewUsage(stderr)
 		return 1
 	}
-	if fs.NArg() > 1 {
+	if len(cmd.Name) > 1 {
 		fmt.Fprintln(stderr, "error: debate new takes exactly one positional argument")
-		fs.Usage()
+		printNewUsage(stderr)
 		return 1
 	}
 
-	name := fs.Arg(0)
+	name := cmd.Name[0]
 	if err := validatePersonaName(name); err != nil {
 		fmt.Fprintln(stderr, "error:", err)
 		return 1
 	}
 
-	if role != "debater" && role != "synthesizer" {
-		fmt.Fprintf(stderr, "error: invalid role %q (must be debater or synthesizer)\n", role)
+	if cmd.Role != "debater" && cmd.Role != "synthesizer" {
+		fmt.Fprintf(stderr, "error: invalid role %q (must be debater or synthesizer)\n", cmd.Role)
 		return 1
 	}
 
@@ -132,7 +187,7 @@ func cmdNew(args []string, stdout, stderr io.Writer, workDir string) int {
 	}
 
 	personaPath := filepath.Join(personasDir, name+".md")
-	created, err := writeIfAbsent(personaPath, buildPersonaTemplate(name, role))
+	created, err := writeIfAbsent(personaPath, buildPersonaTemplate(name, cmd.Role))
 	if err != nil {
 		fmt.Fprintln(stderr, "error:", err)
 		return 1
@@ -143,6 +198,13 @@ func cmdNew(args []string, stdout, stderr io.Writer, workDir string) int {
 	}
 	fmt.Fprintln(stdout, "created", personaPath)
 	return 0
+}
+
+func printNewUsage(stderr io.Writer) {
+	fmt.Fprintln(stderr, "usage: debate new [--role debater|synthesizer] <name>")
+	fmt.Fprintln(stderr, "  Create a new persona file in the discovered .heurema/debate/personas.")
+	fmt.Fprintln(stderr, "  -role string")
+	fmt.Fprintln(stderr, "        persona role (debater|synthesizer) (default \"debater\")")
 }
 
 // validatePersonaName rejects names that are not simple identifiers.
