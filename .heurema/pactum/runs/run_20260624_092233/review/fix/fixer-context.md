@@ -1,10 +1,10 @@
-# Reviewer Context
+# Review Fixer Context
 
 ## Run
 - Run id: run_20260624_092233
 - Run status: contract_approved
 
-## Contract
+## Approved contract
 - Goal: Slice 3: implement persona loading, .heurema/debate workspace discovery, config, and panel selection in internal/debate, fixture-tested only (no engine run, no real backends, no CLI binary). (1) Persona: a persona is a markdown file with YAML frontmatter (role: debater|synthesizer defaulting to debater; model; effort; optional backend; optional tags list) plus a markdown body that is the system prompt; parse and fail-fast-validate it (reject unknown frontmatter keys; require model and effort for api/acp backends; the persona id is its filename without .md). (2) Backend inference: when backend is absent, infer it from the model name (claude-*/opus/sonnet -> claude-agent-acp; gpt-*/codex/o* -> codex-acp; gemini-* -> agy); an explicit backend overrides inference. (3) Discovery: locate .heurema/debate/ by walking up from a start directory like git does; load an optional config.yml whose only key is table (a list/selection of persona names); load an optional context.md baseline preamble; load personas from .heurema/debate/personas/*.md. (4) Selection: resolve the debater panel from config.table or an explicit list of names (when config is absent, the panel is all debater personas); personas with role synthesizer are excluded from the panel. (5) Synthesizer resolution: choose by an explicit name override, else the persona named synthesizer, else a built-in default (model claude-haiku-4-5 with a minimal prompt). (6) Fail-fast: a clear error before anything else for unknown keys, missing required fields, an unresolvable selection, or a missing .heurema/debate. YAML frontmatter and config parsing may use gopkg.in/yaml.v3. Unit tests use fixture .heurema/debate directories. Out of scope: running the engine, real acp/exec/api transports, the cmd/debate CLI wiring, actually invoking models, and synthesizer execution.
 - In scope:
   - Implement internal/debate/persona: a Persona type and a parser/validator for a markdown persona file with YAML frontmatter and a markdown body, including fail-fast validation and backend inference.
@@ -40,75 +40,38 @@
   - bash scripts/dep-guard.sh ./internal/engine/... github.com/heurema/debate/internal/engine
   - bash scripts/dep-guard.sh ./internal/debate/... github.com/heurema/debate/internal/engine github.com/heurema/debate/internal/debate gopkg.in/yaml.v3
 
-## Accepted memory
-- Memory context: context/memory-context.md
-- Selected items: 0
-- Fresh: 0
-- Stale: 0
-- Unknown: 0
-- Stale memory may be outdated and must be verified.
-
-## Gate report
-- Gate status: needs_review
-- Execution attempt id: attempt_001
-- Execution exit code: 0
-- Validation command results:
-  - command_001: bash scripts/check-gofmt.sh (exit 0, timed out: false, result: gate/validation/command_001/result.json)
-  - command_002: go test -count=1 ./internal/debate/... (exit 0, timed out: false, result: gate/validation/command_002/result.json)
-  - command_003: go test -count=1 ./... (exit 0, timed out: false, result: gate/validation/command_003/result.json)
-  - command_004: go vet ./... (exit 0, timed out: false, result: gate/validation/command_004/result.json)
-  - command_005: bash scripts/dep-guard.sh ./internal/engine/... github.com/heurema/debate/internal/engine (exit 0, timed out: false, result: gate/validation/command_005/result.json)
-  - command_006: bash scripts/dep-guard.sh ./internal/debate/... github.com/heurema/debate/internal/engine github.com/heurema/debate/internal/debate gopkg.in/yaml.v3 (exit 0, timed out: false, result: gate/validation/command_006/result.json)
-- Change summary:
-  - changed files:
-    - go.mod
-  - new files:
-    - go.sum
-    - internal/debate/config/config.go
-    - internal/debate/config/config_test.go
-    - internal/debate/persona/persona.go
-    - internal/debate/persona/persona_test.go
-    - scripts/check-gofmt.sh
-  - missing files:
-    - none
-
-## Existing manual review
-- Review status: changes_requested
-- Current findings summary: findings=5 open=5 resolved=0 blocking_open=1
-- Existing findings:
+## Current review findings
+- Summary: findings=7 open=7 resolved=0 blocking_open=1
+- Blocking findings (fix or rebut these — emit exactly one fix-outcome for each):
   - f_001 severity=medium category=correctness blocking=true status=open: Default debater panel is ordered by filename (including the .md suffix) rather than by persona ID, contradicting the acceptance criterion 'all personas whose Role is debater ordered lexicographically by persona ID'. config.go:98-102 sorts full glob paths with sort.Strings, and resolvePanel (config.go:165-170) reuses that order for the default panel. Filename order and ID order diverge when one ID is a prefix of another extended by a character that sorts before '.' (0x2E), e.g. '-' (0x2D): files alice.md and alice-pro.md sort to [alice-pro, alice] by filename but must be [alice, alice-pro] by ID.
-  - f_002 severity=low category=correctness blocking=false status=open: An empty or comment-only config.yml at .heurema/debate/config.yml causes Load to fail-fast with a confusing "config.yml: EOF" error instead of behaving like an absent config (default panel = all debaters). The code only treats os.ErrNotExist as 'missing'; a present-but-empty file is read successfully, then dec.Decode returns io.EOF (yaml.v3 returns io.EOF when there is no YAML document), which is not ErrNotExist and is surfaced as an error.
-  - f_003 severity=low category=quality blocking=false status=open: go.mod declares gopkg.in/yaml.v3 as `// indirect`, but it is a direct dependency: persona.go and config.go both import "gopkg.in/yaml.v3" in non-test code. `go mod tidy` would remove the // indirect marker, so the module graph metadata is inaccurate.
-  - f_004 severity=medium category=quality blocking=false status=open: The default-panel branch that excludes synthesizer-role personas is exercised but never asserted. The contract requires synthesizer-role personas to never appear in the panel, including the default (no-selector) branch where resolvePanel filters on `p.Role == "debater"`. The only default-branch test containing a synthesizer.md (TestLoad_SynthOverride) asserts only ws.Synthesizer.ID and never inspects ws.Panel; TestLoad_DefaultPanel has no synthesizer persona; TestLoad_ValidWorkspace uses a table selector. A regression that wrongly included a synthesizer in the default panel would pass all current tests.
-  - f_005 severity=low category=quality blocking=false status=open: The unclosed-frontmatter error path is untested. splitFrontmatter returns errors.New("unclosed YAML frontmatter") when a persona file starts with a `---` line but never has a closing `---`, but no test feeds such input. All persona fixtures either close their frontmatter or have no leading `---`. This new error path introduced by this change has no coverage, so a regression that mis-handles an unterminated frontmatter fence would not be caught.
-- Existing resolutions:
-  - none
-- Proposal summary: pending=0 accepted=5 rejected=0
-- Existing proposals:
-  - p_001 severity=medium category=correctness blocking=true status=accepted source=reviewer_attempt attempt=reviewer_attempt_001: Default debater panel is ordered by filename (including the .md suffix) rather than by persona ID, contradicting the acceptance criterion 'all personas whose Role is debater ordered lexicographically by persona ID'. config.go:98-102 sorts full glob paths with sort.Strings, and resolvePanel (config.go:165-170) reuses that order for the default panel. Filename order and ID order diverge when one ID is a prefix of another extended by a character that sorts before '.' (0x2E), e.g. '-' (0x2D): files alice.md and alice-pro.md sort to [alice-pro, alice] by filename but must be [alice, alice-pro] by ID.
     location: internal/debate/config/config.go:166
-  - p_002 severity=low category=correctness blocking=false status=accepted source=reviewer_attempt attempt=reviewer_attempt_004: An empty or comment-only config.yml at .heurema/debate/config.yml causes Load to fail-fast with a confusing "config.yml: EOF" error instead of behaving like an absent config (default panel = all debaters). The code only treats os.ErrNotExist as 'missing'; a present-but-empty file is read successfully, then dec.Decode returns io.EOF (yaml.v3 returns io.EOF when there is no YAML document), which is not ErrNotExist and is surfaced as an error.
+- Advisory (non-blocking) findings (context only — do NOT edit code and do NOT emit outcomes for them):
+  - f_002 severity=low category=correctness blocking=false status=open: An empty or comment-only config.yml at .heurema/debate/config.yml causes Load to fail-fast with a confusing "config.yml: EOF" error instead of behaving like an absent config (default panel = all debaters). The code only treats os.ErrNotExist as 'missing'; a present-but-empty file is read successfully, then dec.Decode returns io.EOF (yaml.v3 returns io.EOF when there is no YAML document), which is not ErrNotExist and is surfaced as an error.
     location: internal/debate/config/config.go:79
-  - p_003 severity=low category=quality blocking=false status=accepted source=reviewer_attempt attempt=reviewer_attempt_004: go.mod declares gopkg.in/yaml.v3 as `// indirect`, but it is a direct dependency: persona.go and config.go both import "gopkg.in/yaml.v3" in non-test code. `go mod tidy` would remove the // indirect marker, so the module graph metadata is inaccurate.
+  - f_003 severity=low category=quality blocking=false status=open: go.mod declares gopkg.in/yaml.v3 as `// indirect`, but it is a direct dependency: persona.go and config.go both import "gopkg.in/yaml.v3" in non-test code. `go mod tidy` would remove the // indirect marker, so the module graph metadata is inaccurate.
     location: go.mod:5
-  - p_004 severity=medium category=quality blocking=false status=accepted source=reviewer_attempt attempt=reviewer_attempt_003: The default-panel branch that excludes synthesizer-role personas is exercised but never asserted. The contract requires synthesizer-role personas to never appear in the panel, including the default (no-selector) branch where resolvePanel filters on `p.Role == "debater"`. The only default-branch test containing a synthesizer.md (TestLoad_SynthOverride) asserts only ws.Synthesizer.ID and never inspects ws.Panel; TestLoad_DefaultPanel has no synthesizer persona; TestLoad_ValidWorkspace uses a table selector. A regression that wrongly included a synthesizer in the default panel would pass all current tests.
+  - f_004 severity=medium category=quality blocking=false status=open: The default-panel branch that excludes synthesizer-role personas is exercised but never asserted. The contract requires synthesizer-role personas to never appear in the panel, including the default (no-selector) branch where resolvePanel filters on `p.Role == "debater"`. The only default-branch test containing a synthesizer.md (TestLoad_SynthOverride) asserts only ws.Synthesizer.ID and never inspects ws.Panel; TestLoad_DefaultPanel has no synthesizer persona; TestLoad_ValidWorkspace uses a table selector. A regression that wrongly included a synthesizer in the default panel would pass all current tests.
     location: internal/debate/config/config.go:167
-  - p_005 severity=low category=quality blocking=false status=accepted source=reviewer_attempt attempt=reviewer_attempt_003: The unclosed-frontmatter error path is untested. splitFrontmatter returns errors.New("unclosed YAML frontmatter") when a persona file starts with a `---` line but never has a closing `---`, but no test feeds such input. All persona fixtures either close their frontmatter or have no leading `---`. This new error path introduced by this change has no coverage, so a regression that mis-handles an unterminated frontmatter fence would not be caught.
+  - f_005 severity=low category=quality blocking=false status=open: The unclosed-frontmatter error path is untested. splitFrontmatter returns errors.New("unclosed YAML frontmatter") when a persona file starts with a `---` line but never has a closing `---`, but no test feeds such input. All persona fixtures either close their frontmatter or have no leading `---`. This new error path introduced by this change has no coverage, so a regression that mis-handles an unterminated frontmatter fence would not be caught.
     location: internal/debate/persona/persona.go:137
+  - f_006 severity=medium category=quality blocking=false status=open: TestLoad_SelectorNamesSynthesizerRole is supposed to verify acceptance criterion #8 — that naming a synthesizer-role persona in a selector is a fail-fast error 'distinct from a selector that names a nonexistent persona' — but its assertion `strings.Contains(strings.ToLower(err.Error()), "synthesizer")` is satisfied for the wrong reason. The fixture names the persona literally `synthesizer`, so the substring 'synthesizer' appears in BOTH the intended role error (config.go:154 'has role synthesizer and cannot be in the debater panel') AND the wrong-behavior not-found error (config.go:151 'persona "synthesizer" not found'). A regression that removed the role check or omitted synthesizer-role personas from byID, producing the 'not found' error, would still pass this test. The assertion's own comment claims it checks 'not just not found', but it does not enforce that. The companion TestLoad_WithListSynthesizerRole (config_test.go:329) only asserts err != nil with no message check, so it is even weaker. This is distinct from finding f_004 (default no-selector branch has no panel assertion); this concerns the selector branch's error being mis-pinned.
+    location: internal/debate/config/config_test.go:323
+  - f_007 severity=low category=quality blocking=false status=open: buildDefaultSynthesizer carries an error return that can never fire: it calls persona.InferBackend(defaultSynthModel) where defaultSynthModel is the compile-time constant "claude-haiku-4-5", which InferBackend always resolves to "claude-agent-acp" with a nil error. The error branch at config.go:194-196 is structurally unreachable dead code, and the (persona.Persona, error) signature propagates an error that the default-synthesizer path can never produce.
+    location: internal/debate/config/config.go:192
 
 ## Artifacts
 - Contract: contract/contract.json
-- Gate report: gate/gate-report.json
 - Review: review/review.json
 - Findings: review/findings.jsonl
 - Resolutions: review/resolutions.jsonl
-- Proposals: review/proposals.jsonl
-- Proposal decisions: review/proposal-decisions.jsonl
+- Gate report: gate/gate-report.json
 - Execution result: execute/last-result.json
 
-## Reviewer guidance
-- This context is not complete semantic truth.
-- Use `pactum search "<term>"` and inspect files before proposing findings.
-- Do not invent changes.
-- Do not approve automatically.
-- Report every issue you believe is likely real: use state=candidate for uncertain findings and drop only when trigger, evidence, and fix_direction cannot be filled concretely.
+## Fixer guidance
+- Source files are the source of truth.
+- Use `pactum search "<term>"` and inspect current source files before relying on this context.
+- For each current review finding, trace the finding to the code.
+- If a finding is valid, fix it in place within the approved contract scope.
+- If a finding is a false positive, leave code unchanged for that finding and explain the rebuttal in your final output.
+- Do not approve the review or mutate review findings/resolutions/proposals.
+- Do not modify generated `.heurema` artifacts.
