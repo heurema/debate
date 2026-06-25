@@ -6,6 +6,9 @@ agents:
   - name: codex-xhigh
     model: gpt-5.5
     effort: xhigh
+  - name: opus-xhigh
+    model: claude-opus-4-8
+    effort: xhigh
 map:
   max_file_bytes: 500000
   code_index: auto
@@ -25,7 +28,7 @@ pipeline:
       patience: 2
       settle: 1
   code_review:
-    by: codex-xhigh
+    by: opus-xhigh
     loop:
       max: 10
       patience: 2

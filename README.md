@@ -134,8 +134,6 @@ Build the binary:
 go build -o debate ./cmd/debate
 ```
 
-Design notes live in [`docs/DESIGN.md`](docs/DESIGN.md).
-
 ## Status
 
-This is an active personal project. The implemented surface is intentionally narrow: initialize personas, create personas, parse debate runs, execute configured agents, and serialize results. More advanced orchestration and policy controls are tracked in [`docs/SLICES.md`](docs/SLICES.md).
+This is an active personal project. The implemented surface is intentionally narrow: initialize personas, create personas, parse debate runs, execute configured agents, and serialize results.

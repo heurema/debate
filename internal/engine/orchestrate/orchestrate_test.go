@@ -136,6 +136,114 @@ func TestTranscriptAccumulation(t *testing.T) {
 	}
 }
 
+func TestRunBuildsParticipantPromptsWithFullTranscriptSoFar(t *testing.T) {
+	type promptCall struct {
+		speaker string
+		round   int
+		mode    orchestrate.RenderMode
+		turns   []orchestrate.Turn
+	}
+	var calls []promptCall
+
+	capturePrompt := func(p orchestrate.Participant, t *orchestrate.Transcript, rc loop.RoundContext, m orchestrate.RenderMode) (string, error) {
+		calls = append(calls, promptCall{
+			speaker: p.ID,
+			round:   rc.Round,
+			mode:    m,
+			turns:   t.All(),
+		})
+		return fmt.Sprintf("round=%d speaker=%s", rc.Round, p.ID), nil
+	}
+
+	sA := makeSession([]string{"A r1", "A r2"})
+	sB := makeSession([]string{"B r1", "B r2"})
+
+	cfg := orchestrate.Config{
+		Participants: []orchestrate.Participant{
+			{ID: "A", Session: sA},
+			{ID: "B", Session: sB},
+		},
+		Scheduler: orchestrate.RoundRobin(false),
+		Prompt:    capturePrompt,
+		Verdict:   trivialVerdict{loop.RoundResult{Clean: false, Progress: true}},
+		Limits:    loop.Limits{Max: 2, Settle: 5, Patience: 5},
+	}
+
+	_, err := orchestrate.Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(calls) != 4 {
+		t.Fatalf("prompt calls = %d, want 4", len(calls))
+	}
+	for i, call := range calls {
+		if call.mode != orchestrate.Full {
+			t.Fatalf("call[%d] mode = %v, want Full", i, call.mode)
+		}
+	}
+
+	want := []struct {
+		speaker  string
+		round    int
+		contents []string
+	}{
+		{speaker: "A", round: 1, contents: nil},
+		{speaker: "B", round: 1, contents: []string{"A r1"}},
+		{speaker: "A", round: 2, contents: []string{"A r1", "B r1"}},
+		{speaker: "B", round: 2, contents: []string{"A r1", "B r1", "A r2"}},
+	}
+	for i, wantCall := range want {
+		call := calls[i]
+		if call.speaker != wantCall.speaker || call.round != wantCall.round {
+			t.Fatalf("call[%d] = speaker %q round %d, want speaker %q round %d", i, call.speaker, call.round, wantCall.speaker, wantCall.round)
+		}
+		if got := turnContents(call.turns); !equalStrings(got, wantCall.contents) {
+			t.Fatalf("call[%d] transcript contents = %v, want %v", i, got, wantCall.contents)
+		}
+	}
+}
+
+func TestRunPromptTranscriptExcludesFutureTurns(t *testing.T) {
+	var aliceRound2 []orchestrate.Turn
+
+	capturePrompt := func(p orchestrate.Participant, t *orchestrate.Transcript, rc loop.RoundContext, m orchestrate.RenderMode) (string, error) {
+		if p.ID == "A" && rc.Round == 2 {
+			aliceRound2 = t.All()
+		}
+		return fmt.Sprintf("round=%d speaker=%s", rc.Round, p.ID), nil
+	}
+
+	sA := makeSession([]string{"A already committed", "A future response"})
+	sB := makeSession([]string{"B already committed", "B future response"})
+
+	cfg := orchestrate.Config{
+		Participants: []orchestrate.Participant{
+			{ID: "A", Session: sA},
+			{ID: "B", Session: sB},
+		},
+		Scheduler: orchestrate.RoundRobin(false),
+		Prompt:    capturePrompt,
+		Verdict:   trivialVerdict{loop.RoundResult{Clean: false, Progress: true}},
+		Limits:    loop.Limits{Max: 2, Settle: 5, Patience: 5},
+	}
+
+	_, err := orchestrate.Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	got := turnContents(aliceRound2)
+	if !equalStrings(got, []string{"A already committed", "B already committed"}) {
+		t.Fatalf("A round 2 prompt transcript = %v, want only committed prior turns", got)
+	}
+	for _, future := range []string{"A future response", "B future response"} {
+		if containsString(got, future) {
+			t.Fatalf("A round 2 prompt transcript contains future turn %q: %v", future, got)
+		}
+	}
+}
+
 // TestDeltaForSameRound verifies that B sees A's turn when building its prompt in the same round.
 func TestDeltaForSameRound(t *testing.T) {
 	var deltaSeenByB []orchestrate.Turn
@@ -398,4 +506,33 @@ func TestSessionSendErrorSurfaced(t *testing.T) {
 	if len(turns) != 1 || turns[0].Speaker != "A" {
 		t.Errorf("transcript = %+v, want [A's turn]", turns)
 	}
+}
+
+func turnContents(turns []orchestrate.Turn) []string {
+	out := make([]string, len(turns))
+	for i, turn := range turns {
+		out[i] = turn.Content
+	}
+	return out
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func containsString(values []string, needle string) bool {
+	for _, value := range values {
+		if value == needle {
+			return true
+		}
+	}
+	return false
 }

@@ -91,6 +91,35 @@ func TestPromptBoardLabelsTurnsByRoundAndSpeaker(t *testing.T) {
 	}
 }
 
+func TestPromptFullModeRendersRequiredSectionsAndInstructions(t *testing.T) {
+	const brief = "Decide whether to keep the release blocker open."
+	tr := &orchestrate.Transcript{}
+	tr.Append(orchestrate.Turn{Round: 1, Speaker: "Alice", Content: "Alice previous position"})
+	tr.Append(orchestrate.Turn{Round: 2, Speaker: "Bob", Content: "Bob current objection"})
+
+	text := build(t, brief, orchestrate.Participant{ID: "Alice"}, tr, orchestrate.Full)
+
+	required := []string{
+		"You are a participant in a structured deliberation. Each turn:",
+		"1. State your current position clearly.",
+		"2. List any blocking objections that remain unresolved.",
+		"3. Set done=true only when you have no remaining objections.",
+		"## Brief\n\n" + brief,
+		"## Discussion",
+		"[Round 1 — Alice]\nAlice previous position",
+		"[Round 2 — Bob]\nBob current objection",
+		"End your reply with a fenced signal block:",
+		"```signal",
+		`{"position": "<your position>", "objections": ["<obj1>", "..."], "done": <true|false>}`,
+		"Set done=true only if you have no objections. If you list any objections, done must be false.",
+	}
+	for _, want := range required {
+		if !strings.Contains(text, want) {
+			t.Fatalf("prompt missing required text %q\nprompt:\n%s", want, text)
+		}
+	}
+}
+
 func TestPromptEmptyTranscript(t *testing.T) {
 	tr := &orchestrate.Transcript{}
 	p := orchestrate.Participant{ID: "A"}

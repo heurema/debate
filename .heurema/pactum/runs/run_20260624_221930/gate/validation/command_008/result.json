@@ -1,0 +1,12 @@
+{
+  "schema": "pactum.validation_command_result.v1alpha1",
+  "id": "command_008",
+  "command": "bash -lc 'disallowed=$( { git diff --name-only -- .; git diff --cached --name-only -- .; git ls-files --others --exclude-standard -- .; } | sort -u | grep -Ev \"^(internal/backend/acp/acp\\.go|internal/backend/acp/acp_test\\.go|internal/backend/acp/integration_test\\.go|\\.heurema/pactum/)\" || true); test -z \"$disallowed\"'",
+  "started_at": "2026-06-24T22:54:20.818815Z",
+  "finished_at": "2026-06-24T22:54:20.870986Z",
+  "duration_ms": 52,
+  "exit_code": 0,
+  "timed_out": false,
+  "stdout": "gate/validation/command_008/stdout.log",
+  "stderr": "gate/validation/command_008/stderr.log"
+}

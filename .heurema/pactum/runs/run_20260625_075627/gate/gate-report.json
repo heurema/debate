@@ -1,0 +1,94 @@
+{
+  "schema": "pactum.gate_report.v1alpha1",
+  "run_id": "run_20260625_075627",
+  "created_at": "2026-06-25T08:58:37Z",
+  "status": "needs_review",
+  "execution": {
+    "attempt_id": "attempt_001",
+    "exit_code": 0,
+    "timed_out": false,
+    "result": "execute/last-result.json"
+  },
+  "changes": {
+    "status": "changed",
+    "changed_files": [
+      "internal/debate/prompt/prompt_test.go",
+      "internal/debate/runner/runner_test.go",
+      "internal/engine/orchestrate/orchestrate.go",
+      "internal/engine/orchestrate/orchestrate_test.go"
+    ],
+    "new_files": [],
+    "missing_files": [],
+    "reasons": [
+      "changed file: internal/debate/prompt/prompt_test.go",
+      "changed file: internal/debate/runner/runner_test.go",
+      "changed file: internal/engine/orchestrate/orchestrate.go",
+      "changed file: internal/engine/orchestrate/orchestrate_test.go"
+    ]
+  },
+  "validation": {
+    "commands_allowed": true,
+    "commands": [
+      {
+        "id": "command_001",
+        "command": "bash scripts/check-gofmt.sh",
+        "exit_code": 0,
+        "timed_out": false,
+        "stdout": "gate/validation/command_001/stdout.log",
+        "stderr": "gate/validation/command_001/stderr.log",
+        "result": "gate/validation/command_001/result.json"
+      },
+      {
+        "id": "command_002",
+        "command": "go test -count=1 ./internal/engine/orchestrate ./internal/debate/prompt ./internal/debate/runner ./cmd/debate",
+        "exit_code": 0,
+        "timed_out": false,
+        "stdout": "gate/validation/command_002/stdout.log",
+        "stderr": "gate/validation/command_002/stderr.log",
+        "result": "gate/validation/command_002/result.json"
+      },
+      {
+        "id": "command_003",
+        "command": "bash -c 'set -euo pipefail; rg --version \u003e/dev/null; forbidden=\"(ContextMode|TranscriptMode|PromptMode|HistoryMode|DeltaMode|FullMode|contextMode|transcriptMode|promptMode|historyMode|deltaMode|fullMode|context[[:space:]_-]?mode|transcript[[:space:]_-]?mode|prompt[[:space:]_-]?mode|history[[:space:]_-]?mode|delta[[:space:]_-]?mode|full[[:space:]_-]?mode)\"; set +e; rg -n --glob \"!*_test.go\" \"\\\"[^\\\"]*$forbidden[^\\\"]*\\\"\" ./cmd/debate; status=$?; set -e; if [ \"$status\" -eq 0 ]; then exit 1; elif [ \"$status\" -gt 1 ]; then exit \"$status\"; fi; set +e; rg -n --glob \"!*_test.go\" \"(yaml|json|toml|mapstructure):\\\"[^\\\"]*$forbidden[^\\\"]*\\\"|frontmatter[^\\n]*$forbidden|$forbidden[^\\n]*frontmatter\" ./cmd/debate ./internal/debate/config ./internal/debate/persona ./internal/debate/runner ./internal/engine/orchestrate; status=$?; set -e; if [ \"$status\" -eq 0 ]; then exit 1; elif [ \"$status\" -gt 1 ]; then exit \"$status\"; fi; set +e; rg -n --glob \"!*_test.go\" \"^(type|func|const|var)[[:space:]]+[A-Z][A-Za-z0-9_]*.*$forbidden|^[[:space:]]+[A-Z][A-Za-z0-9_]*[[:space:]].*$forbidden\" ./internal/debate/runner ./internal/engine/orchestrate ./internal/debate/persona; status=$?; set -e; if [ \"$status\" -eq 0 ]; then exit 1; elif [ \"$status\" -eq 1 ]; then exit 0; else exit \"$status\"; fi'",
+        "exit_code": 0,
+        "timed_out": false,
+        "stdout": "gate/validation/command_003/stdout.log",
+        "stderr": "gate/validation/command_003/stderr.log",
+        "result": "gate/validation/command_003/result.json"
+      },
+      {
+        "id": "command_004",
+        "command": "go test -count=1 ./...",
+        "exit_code": 0,
+        "timed_out": false,
+        "stdout": "gate/validation/command_004/stdout.log",
+        "stderr": "gate/validation/command_004/stderr.log",
+        "result": "gate/validation/command_004/result.json"
+      },
+      {
+        "id": "command_005",
+        "command": "go vet ./...",
+        "exit_code": 0,
+        "timed_out": false,
+        "stdout": "gate/validation/command_005/stdout.log",
+        "stderr": "gate/validation/command_005/stderr.log",
+        "result": "gate/validation/command_005/result.json"
+      },
+      {
+        "id": "command_006",
+        "command": "go build ./cmd/debate",
+        "exit_code": 0,
+        "timed_out": false,
+        "stdout": "gate/validation/command_006/stdout.log",
+        "stderr": "gate/validation/command_006/stderr.log",
+        "result": "gate/validation/command_006/result.json"
+      }
+    ]
+  },
+  "summary": {
+    "execution_passed": true,
+    "validation_passed": true,
+    "changes_need_review": true,
+    "scope_blocked": false
+  }
+}

@@ -2,12 +2,14 @@
 package acp
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,6 +39,7 @@ const (
 	defaultCodexPackage  = "@heurema/codex-acp@latest"
 	defaultOpenTimeout   = 45 * time.Second
 	defaultSendTimeout   = 5 * time.Minute
+	maxReadTextFileBytes = 1024 * 1024
 )
 
 // ProcessRunner starts a subprocess and returns (stdin, stdout, kill, err).
@@ -80,11 +83,11 @@ func (t *acpTransport) Open(ctx context.Context, spec transport.Spec) (transport
 	if err != nil {
 		return nil, fmt.Errorf("acp: resolve cwd: %w", transport.ErrClientError)
 	}
-	return t.openAt(ctx, spec, cwd)
+	return t.openAt(ctx, spec, cwd, nil)
 }
 
 // openAt opens a session pinned to a specific cwd. Used by Open and during recovery.
-func (t *acpTransport) openAt(ctx context.Context, spec transport.Spec, cwd string) (*acpSession, error) {
+func (t *acpTransport) openAt(ctx context.Context, spec transport.Spec, cwd string, cl *clientImpl) (*acpSession, error) {
 	cmd, env := t.buildCmd(spec)
 
 	stdinW, stdoutR, kill, err := t.run(cwd, cmd[0], cmd[1:], env)
@@ -95,13 +98,31 @@ func (t *acpTransport) openAt(ctx context.Context, spec transport.Spec, cwd stri
 	openCtx, cancel := withOptionalTimeout(ctx, timeoutFromEnv(t.getEnv, EnvOpenTimeout, defaultOpenTimeout))
 	defer cancel()
 
-	cl := &clientImpl{}
+	createdClient := false
+	if cl == nil {
+		cl, err = newClientImpl(cwd)
+		if err != nil {
+			_ = kill()
+			return nil, fmt.Errorf("acp: initialize read root: %w", err)
+		}
+		createdClient = true
+	}
 	conn := acpsdk.NewClientSideConnection(cl, stdinW, stdoutR)
 
 	if _, err := conn.Initialize(openCtx, acpsdk.InitializeRequest{
 		ProtocolVersion: acpsdk.ProtocolVersionNumber,
+		ClientCapabilities: acpsdk.ClientCapabilities{
+			Fs: acpsdk.FileSystemCapabilities{
+				ReadTextFile:  true,
+				WriteTextFile: false,
+			},
+			Terminal: false,
+		},
 	}); err != nil {
 		_ = kill()
+		if createdClient {
+			_ = cl.close()
+		}
 		return nil, fmt.Errorf("acp: initialize %q: %w", t.backendID, classifyConnErr(err))
 	}
 
@@ -111,6 +132,9 @@ func (t *acpTransport) openAt(ctx context.Context, spec transport.Spec, cwd stri
 	})
 	if err != nil {
 		_ = kill()
+		if createdClient {
+			_ = cl.close()
+		}
 		return nil, fmt.Errorf("acp: new session %q: %w", t.backendID, classifyConnErr(err))
 	}
 
@@ -127,7 +151,7 @@ func (t *acpTransport) openAt(ctx context.Context, spec transport.Spec, cwd stri
 
 // buildCmd returns the command args and environment for the given backend and spec.
 // claude-agent-acp: npx -y <pkg>  with ANTHROPIC_MODEL and CLAUDE_CODE_EFFORT_LEVEL
-// codex-acp:        npx -y <pkg> -c model=<model> -c sandbox_mode=read-only
+// codex-acp:        npx -y <pkg> -c model=<model> -c model_reasoning_effort=<effort> -c sandbox_mode=read-only
 func (t *acpTransport) buildCmd(spec transport.Spec) (cmd []string, env []string) {
 	base := os.Environ()
 	switch t.backendID {
@@ -146,8 +170,11 @@ func (t *acpTransport) buildCmd(spec transport.Spec) (cmd []string, env []string
 		if pkg == "" {
 			pkg = defaultCodexPackage
 		}
-		// Codex effort is intentionally not wired; codex-acp exposes no effort knob.
-		cmd = []string{"npx", "-y", pkg, "-c", "model=" + spec.Model, "-c", "sandbox_mode=read-only"}
+		cmd = []string{"npx", "-y", pkg, "-c", "model=" + spec.Model}
+		if spec.Effort != "" {
+			cmd = append(cmd, "-c", "model_reasoning_effort="+spec.Effort)
+		}
+		cmd = append(cmd, "-c", "sandbox_mode=read-only")
 		env = base
 	}
 	return
@@ -261,14 +288,13 @@ func (s *acpSession) recover(ctx context.Context) error {
 
 	s.closeInternal()
 
-	newSess, err := s.tr.openAt(ctx, s.spec, s.cwd)
+	newSess, err := s.tr.openAt(ctx, s.spec, s.cwd, s.cl)
 	if err != nil {
 		return fmt.Errorf("acp: recovery reopen: %w", err)
 	}
 
 	s.mu.Lock()
 	s.conn = newSess.conn
-	s.cl = newSess.cl
 	s.kill = newSess.kill
 	s.sessionID = newSess.sessionID
 	s.closed = false
@@ -302,7 +328,12 @@ func (s *acpSession) Close() error {
 	}
 	s.closed = true
 	if s.kill != nil {
-		return s.kill()
+		if err := s.kill(); err != nil {
+			return err
+		}
+	}
+	if s.cl != nil {
+		return s.cl.close()
 	}
 	return nil
 }
@@ -310,8 +341,47 @@ func (s *acpSession) Close() error {
 // clientImpl implements acpsdk.Client for our transport.
 // It accumulates agent message text chunks during a prompt turn.
 type clientImpl struct {
-	mu  sync.Mutex
-	buf strings.Builder
+	mu         sync.Mutex
+	buf        strings.Builder
+	readRoot   string
+	readRootFS *os.Root
+}
+
+func newClientImpl(cwd string) (*clientImpl, error) {
+	root, err := canonicalReadRoot(cwd)
+	if err != nil {
+		return nil, err
+	}
+	rootFS, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, fmt.Errorf("acp: invalid-root: %w", err)
+	}
+	return &clientImpl{readRoot: root, readRootFS: rootFS}, nil
+}
+
+func canonicalReadRoot(cwd string) (string, error) {
+	if strings.TrimSpace(cwd) == "" {
+		return "", fmt.Errorf("acp: invalid-root: empty cwd")
+	}
+	if !filepath.IsAbs(cwd) {
+		return "", fmt.Errorf("acp: invalid-root: cwd is not absolute")
+	}
+	abs, err := filepath.Abs(cwd)
+	if err != nil {
+		return "", fmt.Errorf("acp: invalid-root: %w", err)
+	}
+	root, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", fmt.Errorf("acp: invalid-root: %w", err)
+	}
+	info, err := os.Stat(root)
+	if err != nil {
+		return "", fmt.Errorf("acp: invalid-root: %w", err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("acp: invalid-root: not a directory")
+	}
+	return filepath.Clean(root), nil
 }
 
 func (c *clientImpl) reset() {
@@ -326,6 +396,15 @@ func (c *clientImpl) text() string {
 	return c.buf.String()
 }
 
+func (c *clientImpl) close() error {
+	if c.readRootFS == nil {
+		return nil
+	}
+	err := c.readRootFS.Close()
+	c.readRootFS = nil
+	return err
+}
+
 func (c *clientImpl) SessionUpdate(_ context.Context, n acpsdk.SessionNotification) error {
 	if n.Update.AgentMessageChunk != nil && n.Update.AgentMessageChunk.Content.Text != nil {
 		c.mu.Lock()
@@ -336,52 +415,174 @@ func (c *clientImpl) SessionUpdate(_ context.Context, n acpsdk.SessionNotificati
 }
 
 func (c *clientImpl) ReadTextFile(_ context.Context, p acpsdk.ReadTextFileRequest) (acpsdk.ReadTextFileResponse, error) {
-	data, err := os.ReadFile(p.Path)
+	path, err := c.resolveReadPath(p.Path)
 	if err != nil {
 		return acpsdk.ReadTextFileResponse{}, err
 	}
-	return acpsdk.ReadTextFileResponse{Content: string(data)}, nil
+	if p.Line != nil && *p.Line < 0 {
+		return acpsdk.ReadTextFileResponse{}, fmt.Errorf("acp: invalid-line: line must be non-negative")
+	}
+	if p.Limit != nil && *p.Limit < 0 {
+		return acpsdk.ReadTextFileResponse{}, fmt.Errorf("acp: invalid-limit: limit must be non-negative")
+	}
+	if c.readRootFS == nil {
+		return acpsdk.ReadTextFileResponse{}, fmt.Errorf("acp: root-unavailable: read root is not initialized")
+	}
+	f, err := c.readRootFS.Open(path)
+	if err != nil {
+		if isRootEscapeError(err) {
+			return acpsdk.ReadTextFileResponse{}, fmt.Errorf("acp: outside-root path-escape: %s", p.Path)
+		}
+		return acpsdk.ReadTextFileResponse{}, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return acpsdk.ReadTextFileResponse{}, err
+	}
+	selected := selectReadTextLines(data, intValueOrDefault(p.Line, 1), intValueOrDefault(p.Limit, 0))
+	if len(selected) > maxReadTextFileBytes {
+		return acpsdk.ReadTextFileResponse{}, fmt.Errorf("acp: size-limit: selected content exceeds %d bytes", maxReadTextFileBytes)
+	}
+	return acpsdk.ReadTextFileResponse{Content: string(selected)}, nil
 }
 
 // WriteTextFile denies all writes; the agent must not write files.
 func (c *clientImpl) WriteTextFile(_ context.Context, _ acpsdk.WriteTextFileRequest) (acpsdk.WriteTextFileResponse, error) {
-	return acpsdk.WriteTextFileResponse{}, fmt.Errorf("acp: write denied: transport is read-only")
+	return acpsdk.WriteTextFileResponse{}, fmt.Errorf("acp: write-denied: write unsupported")
 }
 
 func (c *clientImpl) RequestPermission(_ context.Context, p acpsdk.RequestPermissionRequest) (acpsdk.RequestPermissionResponse, error) {
-	if len(p.Options) == 0 {
-		return acpsdk.RequestPermissionResponse{
-			Outcome: acpsdk.RequestPermissionOutcome{
-				Cancelled: &acpsdk.RequestPermissionOutcomeCancelled{Outcome: "cancelled"},
-			},
-		}, nil
+	if p.ToolCall.Kind != nil && *p.ToolCall.Kind == acpsdk.ToolKindRead {
+		for _, opt := range p.Options {
+			if opt.Kind == acpsdk.PermissionOptionKindAllowOnce && opt.OptionId != "" {
+				return acpsdk.RequestPermissionResponse{
+					Outcome: acpsdk.RequestPermissionOutcome{
+						Selected: &acpsdk.RequestPermissionOutcomeSelected{
+							OptionId: opt.OptionId,
+							Outcome:  "selected",
+						},
+					},
+				}, nil
+			}
+		}
 	}
-	// Allow the first option (typically "allow once") to keep the adapter running.
 	return acpsdk.RequestPermissionResponse{
 		Outcome: acpsdk.RequestPermissionOutcome{
-			Selected: &acpsdk.RequestPermissionOutcomeSelected{
-				OptionId: p.Options[0].OptionId,
-				Outcome:  "selected",
-			},
+			Cancelled: &acpsdk.RequestPermissionOutcomeCancelled{Outcome: "cancelled"},
 		},
 	}, nil
 }
 
 // Terminal stubs — the debate transport does not use interactive terminals.
 func (c *clientImpl) CreateTerminal(_ context.Context, _ acpsdk.CreateTerminalRequest) (acpsdk.CreateTerminalResponse, error) {
-	return acpsdk.CreateTerminalResponse{}, fmt.Errorf("acp: terminal not supported")
+	return acpsdk.CreateTerminalResponse{}, terminalUnsupportedError()
 }
 func (c *clientImpl) KillTerminal(_ context.Context, _ acpsdk.KillTerminalRequest) (acpsdk.KillTerminalResponse, error) {
-	return acpsdk.KillTerminalResponse{}, fmt.Errorf("acp: terminal not supported")
+	return acpsdk.KillTerminalResponse{}, terminalUnsupportedError()
 }
 func (c *clientImpl) TerminalOutput(_ context.Context, _ acpsdk.TerminalOutputRequest) (acpsdk.TerminalOutputResponse, error) {
-	return acpsdk.TerminalOutputResponse{}, fmt.Errorf("acp: terminal not supported")
+	return acpsdk.TerminalOutputResponse{}, terminalUnsupportedError()
 }
 func (c *clientImpl) ReleaseTerminal(_ context.Context, _ acpsdk.ReleaseTerminalRequest) (acpsdk.ReleaseTerminalResponse, error) {
-	return acpsdk.ReleaseTerminalResponse{}, fmt.Errorf("acp: terminal not supported")
+	return acpsdk.ReleaseTerminalResponse{}, terminalUnsupportedError()
 }
 func (c *clientImpl) WaitForTerminalExit(_ context.Context, _ acpsdk.WaitForTerminalExitRequest) (acpsdk.WaitForTerminalExitResponse, error) {
-	return acpsdk.WaitForTerminalExitResponse{}, fmt.Errorf("acp: terminal not supported")
+	return acpsdk.WaitForTerminalExitResponse{}, terminalUnsupportedError()
+}
+
+func (c *clientImpl) resolveReadPath(path string) (string, error) {
+	if c.readRoot == "" {
+		return "", fmt.Errorf("acp: root-unavailable: read root is not initialized")
+	}
+	if strings.TrimSpace(path) == "" {
+		return "", fmt.Errorf("acp: invalid-path: empty path")
+	}
+	candidate := path
+	if !filepath.IsAbs(candidate) {
+		candidate = filepath.Join(c.readRoot, candidate)
+	}
+	abs, err := filepath.Abs(candidate)
+	if err != nil {
+		return "", fmt.Errorf("acp: invalid-path: %w", err)
+	}
+	abs = filepath.Clean(abs)
+	if !isWithinRoot(c.readRoot, abs) && filepath.IsAbs(path) {
+		resolved, err := filepath.EvalSymlinks(abs)
+		if err == nil {
+			abs = filepath.Clean(resolved)
+		}
+	}
+	if !isWithinRoot(c.readRoot, abs) {
+		return "", fmt.Errorf("acp: outside-root path-escape: %s", path)
+	}
+	rel, err := filepath.Rel(c.readRoot, abs)
+	if err != nil {
+		return "", fmt.Errorf("acp: outside-root path-escape: %s", path)
+	}
+	return rel, nil
+}
+
+func isWithinRoot(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != "" && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)))
+}
+
+func isRootEscapeError(err error) bool {
+	return strings.Contains(err.Error(), "path escapes from parent")
+}
+
+func intValueOrDefault(v *int, def int) int {
+	if v == nil || *v == 0 {
+		return def
+	}
+	return *v
+}
+
+func selectReadTextLines(data []byte, line, limit int) []byte {
+	if line < 1 {
+		line = 1
+	}
+	start := lineStart(data, line)
+	if start >= len(data) {
+		return []byte{}
+	}
+	if limit == 0 {
+		return data[start:]
+	}
+	end := start
+	for i := 0; i < limit; i++ {
+		next := bytes.IndexByte(data[end:], '\n')
+		if next == -1 {
+			return data[start:]
+		}
+		end += next + 1
+	}
+	return data[start:end]
+}
+
+func lineStart(data []byte, line int) int {
+	if line <= 1 {
+		return 0
+	}
+	current := 1
+	for i, b := range data {
+		if b != '\n' {
+			continue
+		}
+		current++
+		if current == line {
+			return i + 1
+		}
+	}
+	return len(data)
+}
+
+func terminalUnsupportedError() error {
+	return fmt.Errorf("acp: terminal-unsupported: terminal methods are not supported")
 }
 
 // classifyConnErr maps ACP connection/protocol errors to transport sentinel errors.

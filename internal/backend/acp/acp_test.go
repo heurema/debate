@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -20,6 +22,7 @@ type promptScenario struct {
 	chunks []string          // agent_message_chunk text pieces to stream
 	stop   acpsdk.StopReason // stop reason to return
 	err    error             // if non-nil, returned as error (becomes InternalError on wire)
+	read   *acpsdk.ReadTextFileRequest
 }
 
 // fakeAgent implements acpsdk.Agent for deterministic unit tests.
@@ -29,6 +32,7 @@ type fakeAgent struct {
 	asc             *acpsdk.AgentSideConnection
 	scenarios       []promptScenario
 	callIdx         int
+	initRequests    []acpsdk.InitializeRequest
 	newSessCwds     []string                // Cwd from each NewSession call, in order
 	receivedBlocks  [][]acpsdk.ContentBlock // prompt content from each Prompt call, in order
 	newSessionDelay time.Duration
@@ -41,7 +45,10 @@ func (f *fakeAgent) setScenarios(ss ...promptScenario) {
 	f.mu.Unlock()
 }
 
-func (f *fakeAgent) Initialize(_ context.Context, _ acpsdk.InitializeRequest) (acpsdk.InitializeResponse, error) {
+func (f *fakeAgent) Initialize(_ context.Context, r acpsdk.InitializeRequest) (acpsdk.InitializeResponse, error) {
+	f.mu.Lock()
+	f.initRequests = append(f.initRequests, r)
+	f.mu.Unlock()
 	return acpsdk.InitializeResponse{ProtocolVersion: acpsdk.ProtocolVersionNumber}, nil
 }
 func (f *fakeAgent) Authenticate(_ context.Context, _ acpsdk.AuthenticateRequest) (acpsdk.AuthenticateResponse, error) {
@@ -97,6 +104,21 @@ func (f *fakeAgent) Prompt(ctx context.Context, p acpsdk.PromptRequest) (acpsdk.
 
 	if sc.err != nil {
 		return acpsdk.PromptResponse{}, sc.err
+	}
+	if sc.read != nil {
+		resp, err := asc.ReadTextFile(ctx, *sc.read)
+		text := resp.Content
+		if err != nil {
+			text = err.Error()
+		}
+		_ = asc.SessionUpdate(ctx, acpsdk.SessionNotification{
+			SessionId: p.SessionId,
+			Update:    acpsdk.UpdateAgentMessageText(text),
+		})
+		if sc.stop == "" {
+			sc.stop = acpsdk.StopReasonEndTurn
+		}
+		return acpsdk.PromptResponse{StopReason: sc.stop}, nil
 	}
 	if len(sc.chunks) == 0 && sc.stop == "" {
 		select {
@@ -257,6 +279,9 @@ func TestBuildCmd_CodexDefault(t *testing.T) {
 	if !contains(cmd, "model=codex-mini") {
 		t.Errorf("expected model flag in cmd: %v", cmd)
 	}
+	if !contains(cmd, "model_reasoning_effort=low") {
+		t.Errorf("expected model_reasoning_effort flag in cmd: %v", cmd)
+	}
 	if !contains(cmd, "sandbox_mode=read-only") {
 		t.Errorf("expected sandbox_mode flag in cmd: %v", cmd)
 	}
@@ -276,13 +301,22 @@ func TestBuildCmd_CodexOverride(t *testing.T) {
 	}
 }
 
-func TestBuildCmd_CodexIgnoresEffort(t *testing.T) {
+func TestBuildCmd_CodexWiresEffort(t *testing.T) {
 	tr := &acpTransport{backendID: BackendCodex, getEnv: noEnv}
-	// Use a unique sentinel effort value that would only appear if buildCmd explicitly added it.
-	_, env := tr.buildCmd(transport.Spec{Model: "codex-mini", Effort: "SENTINEL_EFFORT_VALUE"})
-	// Codex effort is intentionally not wired; buildCmd must not add CLAUDE_CODE_EFFORT_LEVEL.
+	cmd, env := tr.buildCmd(transport.Spec{Model: "codex-mini", Effort: "SENTINEL_EFFORT_VALUE"})
+	if !contains(cmd, "model_reasoning_effort=SENTINEL_EFFORT_VALUE") {
+		t.Errorf("expected codex effort config in cmd: %v", cmd)
+	}
 	if containsEnv(env, "CLAUDE_CODE_EFFORT_LEVEL=SENTINEL_EFFORT_VALUE") {
-		t.Error("codex buildCmd must not wire CLAUDE_CODE_EFFORT_LEVEL (effort is ignored for codex)")
+		t.Error("codex buildCmd must not wire CLAUDE_CODE_EFFORT_LEVEL")
+	}
+}
+
+func TestBuildCmd_CodexOmitsEmptyEffort(t *testing.T) {
+	tr := &acpTransport{backendID: BackendCodex, getEnv: noEnv}
+	cmd, _ := tr.buildCmd(transport.Spec{Model: "codex-mini"})
+	if contains(cmd, "model_reasoning_effort=") {
+		t.Errorf("unexpected empty codex effort config in cmd: %v", cmd)
 	}
 }
 
@@ -314,6 +348,29 @@ func TestOpen_Handshake(t *testing.T) {
 	_ = openSession(t, tr, transport.Spec{ID: "p1", Model: "m", Effort: "low"})
 	if len(state.spawns) != 1 {
 		t.Errorf("want 1 spawn, got %d", len(state.spawns))
+	}
+}
+
+func TestOpen_AdvertisesClientCapabilities(t *testing.T) {
+	agent := &fakeAgent{}
+	run, _ := newFakeRunner(t, agent)
+	tr, _ := New(BackendClaude, noEnv, run)
+	_ = openSession(t, tr, transport.Spec{ID: "p1", Model: "m", Effort: "low"})
+
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if len(agent.initRequests) != 1 {
+		t.Fatalf("want 1 Initialize request, got %d", len(agent.initRequests))
+	}
+	caps := agent.initRequests[0].ClientCapabilities
+	if !caps.Fs.ReadTextFile {
+		t.Error("Initialize must advertise fs.readTextFile=true")
+	}
+	if caps.Fs.WriteTextFile {
+		t.Error("Initialize must advertise fs.writeTextFile=false")
+	}
+	if caps.Terminal {
+		t.Error("Initialize must advertise terminal=false")
 	}
 }
 
@@ -497,6 +554,53 @@ func TestSend_RetryableDropRecovery(t *testing.T) {
 	}
 }
 
+func TestSend_RecoveryPreservesCapturedReadRootForSymlinkCwd(t *testing.T) {
+	base := t.TempDir()
+	rootA := filepath.Join(base, "root-a")
+	rootB := filepath.Join(base, "root-b")
+	if err := os.Mkdir(rootA, 0o700); err != nil {
+		t.Fatalf("Mkdir rootA: %v", err)
+	}
+	if err := os.Mkdir(rootB, 0o700); err != nil {
+		t.Fatalf("Mkdir rootB: %v", err)
+	}
+	mustWriteFile(t, filepath.Join(rootA, "same.txt"), "root-a")
+	mustWriteFile(t, filepath.Join(rootB, "same.txt"), "root-b")
+	link := filepath.Join(base, "cwd-link")
+	if err := os.Symlink(rootA, link); err != nil {
+		t.Fatalf("Symlink rootA: %v", err)
+	}
+
+	agent := &fakeAgent{}
+	agent.setScenarios(
+		promptScenario{err: fmt.Errorf("drop")},
+		promptScenario{read: &acpsdk.ReadTextFileRequest{Path: "same.txt"}},
+	)
+	run, _ := newFakeRunner(t, agent)
+	trIface, _ := New(BackendClaude, noEnv, run)
+	tr := trIface.(*acpTransport)
+	sess, err := tr.openAt(context.Background(), transport.Spec{ID: "p1", Model: "m"}, link, nil)
+	if err != nil {
+		t.Fatalf("openAt: %v", err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+
+	if err := os.Remove(link); err != nil {
+		t.Fatalf("Remove symlink: %v", err)
+	}
+	if err := os.Symlink(rootB, link); err != nil {
+		t.Fatalf("Symlink rootB: %v", err)
+	}
+
+	result, err := sess.Send(context.Background(), "read after recovery")
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if result.Content != "root-a" {
+		t.Fatalf("content = %q, want original captured root content", result.Content)
+	}
+}
+
 func TestSend_RecoveryWithHistoryReplay(t *testing.T) {
 	// Scenario: send two prompts successfully, then drop on third.
 	// Recovery replays first two, then retries third.
@@ -644,7 +748,401 @@ func TestSealed_Cwd(t *testing.T) {
 	}
 }
 
+func TestOpen_ReadTextFileUsesSessionCwdRoot(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	mustWriteFile(t, filepath.Join(root, "inside.txt"), "inside")
+	mustWriteFile(t, filepath.Join(outside, "outside.txt"), "outside")
+	if err := os.Symlink(filepath.Join(outside, "outside.txt"), filepath.Join(root, "link.txt")); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(wd); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	})
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+
+	agent := &fakeAgent{}
+	agent.setScenarios(
+		promptScenario{read: &acpsdk.ReadTextFileRequest{Path: "inside.txt"}},
+		promptScenario{read: &acpsdk.ReadTextFileRequest{Path: filepath.Join(outside, "outside.txt")}},
+		promptScenario{read: &acpsdk.ReadTextFileRequest{Path: "link.txt"}},
+	)
+	run, _ := newFakeRunner(t, agent)
+	tr, _ := New(BackendClaude, noEnv, run)
+	sess := openSession(t, tr, transport.Spec{ID: "p1", Model: "m", ReadOnly: false})
+
+	result, err := sess.Send(context.Background(), "inside")
+	if err != nil {
+		t.Fatalf("inside Send: %v", err)
+	}
+	if result.Content != "inside" {
+		t.Fatalf("inside content = %q, want inside", result.Content)
+	}
+
+	result, err = sess.Send(context.Background(), "outside")
+	if err != nil {
+		t.Fatalf("outside Send: %v", err)
+	}
+	if !strings.Contains(result.Content, "outside-root path-escape") {
+		t.Fatalf("outside content = %q, want path escape marker", result.Content)
+	}
+
+	result, err = sess.Send(context.Background(), "symlink")
+	if err != nil {
+		t.Fatalf("symlink Send: %v", err)
+	}
+	if !strings.Contains(result.Content, "outside-root path-escape") {
+		t.Fatalf("symlink content = %q, want path escape marker", result.Content)
+	}
+}
+
+func TestClientReadTextFile_RootScoped(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	mustWriteFile(t, filepath.Join(root, "inside.txt"), "inside")
+	mustWriteFile(t, filepath.Join(outside, "outside.txt"), "outside")
+
+	cl := newClientAtRoot(t, root)
+	resp, err := cl.ReadTextFile(context.Background(), acpsdk.ReadTextFileRequest{Path: "inside.txt"})
+	if err != nil {
+		t.Fatalf("relative read: %v", err)
+	}
+	if resp.Content != "inside" {
+		t.Fatalf("relative content = %q, want inside", resp.Content)
+	}
+
+	resp, err = cl.ReadTextFile(context.Background(), acpsdk.ReadTextFileRequest{Path: filepath.Join(root, "inside.txt")})
+	if err != nil {
+		t.Fatalf("absolute inside read: %v", err)
+	}
+	if resp.Content != "inside" {
+		t.Fatalf("absolute content = %q, want inside", resp.Content)
+	}
+
+	_, err = cl.ReadTextFile(context.Background(), acpsdk.ReadTextFileRequest{Path: filepath.Join(outside, "outside.txt")})
+	assertErrorContains(t, err, "outside-root path-escape")
+
+	_, err = cl.ReadTextFile(context.Background(), acpsdk.ReadTextFileRequest{Path: filepath.Join("..", filepath.Base(outside), "outside.txt")})
+	assertErrorContains(t, err, "outside-root path-escape")
+}
+
+func TestClientReadTextFile_SymlinkEscapeDenied(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	mustWriteFile(t, filepath.Join(outside, "secret.txt"), "secret")
+	if err := os.Symlink(filepath.Join(outside, "secret.txt"), filepath.Join(root, "link.txt")); err != nil {
+		t.Fatalf("Symlink: %v", err)
+	}
+
+	cl := newClientAtRoot(t, root)
+	_, err := cl.ReadTextFile(context.Background(), acpsdk.ReadTextFileRequest{Path: "link.txt"})
+	assertErrorContains(t, err, "outside-root path-escape")
+}
+
+func TestClientReadTextFile_CapturedRootIgnoresLaterCwdChanges(t *testing.T) {
+	root := t.TempDir()
+	other := t.TempDir()
+	mustWriteFile(t, filepath.Join(root, "same.txt"), "root")
+	mustWriteFile(t, filepath.Join(other, "same.txt"), "other")
+
+	cl := newClientAtRoot(t, root)
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(wd); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	})
+	if err := os.Chdir(other); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+
+	resp, err := cl.ReadTextFile(context.Background(), acpsdk.ReadTextFileRequest{Path: "same.txt"})
+	if err != nil {
+		t.Fatalf("ReadTextFile: %v", err)
+	}
+	if resp.Content != "root" {
+		t.Fatalf("content = %q, want captured root content", resp.Content)
+	}
+}
+
+func TestClientReadTextFile_LineAndLimit(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "lines.txt")
+	mustWriteFile(t, path, "one\r\ntwo\nthree\nfour")
+	cl := newClientAtRoot(t, root)
+
+	tests := []struct {
+		name    string
+		line    *int
+		limit   *int
+		content string
+	}{
+		{name: "omitted", content: "one\r\ntwo\nthree\nfour"},
+		{name: "zero starts at one", line: intPtr(0), limit: intPtr(0), content: "one\r\ntwo\nthree\nfour"},
+		{name: "line one limit one preserves crlf", line: intPtr(1), limit: intPtr(1), content: "one\r\n"},
+		{name: "line two limit two", line: intPtr(2), limit: intPtr(2), content: "two\nthree\n"},
+		{name: "unterminated final line", line: intPtr(4), limit: intPtr(1), content: "four"},
+		{name: "line beyond eof", line: intPtr(5), limit: intPtr(1), content: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := cl.ReadTextFile(context.Background(), acpsdk.ReadTextFileRequest{
+				Path:  path,
+				Line:  tt.line,
+				Limit: tt.limit,
+			})
+			if err != nil {
+				t.Fatalf("ReadTextFile: %v", err)
+			}
+			if resp.Content != tt.content {
+				t.Fatalf("content = %q, want %q", resp.Content, tt.content)
+			}
+		})
+	}
+}
+
+func TestClientReadTextFile_TrailingLFDoesNotCreateSelectableEmptyLine(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "trailing.txt")
+	mustWriteFile(t, path, "one\n")
+	cl := newClientAtRoot(t, root)
+
+	resp, err := cl.ReadTextFile(context.Background(), acpsdk.ReadTextFileRequest{Path: path, Line: intPtr(2)})
+	if err != nil {
+		t.Fatalf("ReadTextFile: %v", err)
+	}
+	if resp.Content != "" {
+		t.Fatalf("content = %q, want empty", resp.Content)
+	}
+}
+
+func TestClientReadTextFile_RejectsNegativeLineAndLimit(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "file.txt")
+	mustWriteFile(t, path, "content")
+	cl := newClientAtRoot(t, root)
+
+	_, err := cl.ReadTextFile(context.Background(), acpsdk.ReadTextFileRequest{Path: path, Line: intPtr(-1)})
+	assertErrorContains(t, err, "invalid-line")
+
+	_, err = cl.ReadTextFile(context.Background(), acpsdk.ReadTextFileRequest{Path: path, Limit: intPtr(-1)})
+	assertErrorContains(t, err, "invalid-limit")
+}
+
+func TestClientReadTextFile_SizeLimit(t *testing.T) {
+	root := t.TempDir()
+	oversizedPath := filepath.Join(root, "oversized.txt")
+	mustWriteFile(t, oversizedPath, strings.Repeat("x", maxReadTextFileBytes+1))
+	cl := newClientAtRoot(t, root)
+
+	_, err := cl.ReadTextFile(context.Background(), acpsdk.ReadTextFileRequest{Path: oversizedPath})
+	assertErrorContains(t, err, "size-limit")
+
+	limitedPath := filepath.Join(root, "limited.txt")
+	mustWriteFile(t, limitedPath, "ok\n"+strings.Repeat("x", maxReadTextFileBytes+1))
+	resp, err := cl.ReadTextFile(context.Background(), acpsdk.ReadTextFileRequest{Path: limitedPath, Limit: intPtr(1)})
+	if err != nil {
+		t.Fatalf("limited read: %v", err)
+	}
+	if resp.Content != "ok\n" {
+		t.Fatalf("limited content = %q, want ok newline", resp.Content)
+	}
+}
+
+func TestClientReadTextFile_InvalidRootFailsClosed(t *testing.T) {
+	if _, err := newClientImpl(""); err == nil || !strings.Contains(err.Error(), "invalid-root") {
+		t.Fatalf("empty root err = %v, want invalid-root", err)
+	}
+	if _, err := newClientImpl("relative"); err == nil || !strings.Contains(err.Error(), "invalid-root") {
+		t.Fatalf("relative root err = %v, want invalid-root", err)
+	}
+	missing := filepath.Join(t.TempDir(), "missing")
+	if _, err := newClientImpl(missing); err == nil || !strings.Contains(err.Error(), "invalid-root") {
+		t.Fatalf("missing root err = %v, want invalid-root", err)
+	}
+
+	cl := &clientImpl{}
+	_, err := cl.ReadTextFile(context.Background(), acpsdk.ReadTextFileRequest{Path: "file.txt"})
+	assertErrorContains(t, err, "root-unavailable")
+}
+
+func TestClientWriteTextFileDenied(t *testing.T) {
+	cl := &clientImpl{}
+	_, err := cl.WriteTextFile(context.Background(), acpsdk.WriteTextFileRequest{})
+	assertErrorContains(t, err, "write-denied")
+}
+
+func TestClientTerminalMethodsDenied(t *testing.T) {
+	cl := &clientImpl{}
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{name: "terminal/create", call: func() error {
+			_, err := cl.CreateTerminal(context.Background(), acpsdk.CreateTerminalRequest{})
+			return err
+		}},
+		{name: "terminal/kill", call: func() error {
+			_, err := cl.KillTerminal(context.Background(), acpsdk.KillTerminalRequest{})
+			return err
+		}},
+		{name: "terminal/output", call: func() error {
+			_, err := cl.TerminalOutput(context.Background(), acpsdk.TerminalOutputRequest{})
+			return err
+		}},
+		{name: "terminal/release", call: func() error {
+			_, err := cl.ReleaseTerminal(context.Background(), acpsdk.ReleaseTerminalRequest{})
+			return err
+		}},
+		{name: "terminal/wait_for_exit", call: func() error {
+			_, err := cl.WaitForTerminalExit(context.Background(), acpsdk.WaitForTerminalExitRequest{})
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertErrorContains(t, tt.call(), "terminal-unsupported")
+		})
+	}
+}
+
+func TestClientRequestPermission_SelectsFirstSafeReadAllowOnce(t *testing.T) {
+	cl := &clientImpl{}
+	read := acpsdk.ToolKindRead
+	resp, err := cl.RequestPermission(context.Background(), acpsdk.RequestPermissionRequest{
+		ToolCall: acpsdk.ToolCallUpdate{Kind: &read},
+		Options: []acpsdk.PermissionOption{
+			{Kind: acpsdk.PermissionOptionKindRejectOnce, OptionId: "reject"},
+			{Kind: acpsdk.PermissionOptionKindAllowOnce, OptionId: "allow"},
+			{Kind: acpsdk.PermissionOptionKindAllowOnce, OptionId: "later"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RequestPermission: %v", err)
+	}
+	if resp.Outcome.Selected == nil || resp.Outcome.Selected.OptionId != "allow" {
+		t.Fatalf("selected = %#v, want allow", resp.Outcome.Selected)
+	}
+	if resp.Outcome.Cancelled != nil {
+		t.Fatalf("cancelled unexpectedly: %#v", resp.Outcome.Cancelled)
+	}
+}
+
+func TestClientRequestPermission_CancelsUnsafeOrAmbiguous(t *testing.T) {
+	cl := &clientImpl{}
+	read := acpsdk.ToolKindRead
+	edit := acpsdk.ToolKindEdit
+	tests := []struct {
+		name string
+		req  acpsdk.RequestPermissionRequest
+	}{
+		{
+			name: "missing kind",
+			req: acpsdk.RequestPermissionRequest{
+				ToolCall: acpsdk.ToolCallUpdate{
+					RawInput: map[string]string{"kind": "read"},
+					Title:    stringPtr("read"),
+				},
+				Options: []acpsdk.PermissionOption{{Kind: acpsdk.PermissionOptionKindAllowOnce, OptionId: "allow"}},
+			},
+		},
+		{
+			name: "non-read kind",
+			req: acpsdk.RequestPermissionRequest{
+				ToolCall: acpsdk.ToolCallUpdate{Kind: &edit},
+				Options:  []acpsdk.PermissionOption{{Kind: acpsdk.PermissionOptionKindAllowOnce, OptionId: "allow"}},
+			},
+		},
+		{
+			name: "allow always only",
+			req: acpsdk.RequestPermissionRequest{
+				ToolCall: acpsdk.ToolCallUpdate{Kind: &read},
+				Options:  []acpsdk.PermissionOption{{Kind: acpsdk.PermissionOptionKindAllowAlways, OptionId: "always"}},
+			},
+		},
+		{
+			name: "empty options",
+			req:  acpsdk.RequestPermissionRequest{ToolCall: acpsdk.ToolCallUpdate{Kind: &read}},
+		},
+		{
+			name: "empty option id",
+			req: acpsdk.RequestPermissionRequest{
+				ToolCall: acpsdk.ToolCallUpdate{Kind: &read},
+				Options:  []acpsdk.PermissionOption{{Kind: acpsdk.PermissionOptionKindAllowOnce}},
+			},
+		},
+		{
+			name: "ambiguous option metadata",
+			req: acpsdk.RequestPermissionRequest{
+				ToolCall: acpsdk.ToolCallUpdate{Kind: &read},
+				Options: []acpsdk.PermissionOption{{
+					Kind:     acpsdk.PermissionOptionKind(""),
+					Name:     "Allow once for read",
+					OptionId: "looks-safe",
+					Meta:     map[string]any{"kind": "allow_once"},
+				}},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := cl.RequestPermission(context.Background(), tt.req)
+			if err != nil {
+				t.Fatalf("RequestPermission: %v", err)
+			}
+			if resp.Outcome.Cancelled == nil {
+				t.Fatalf("Outcome = %#v, want cancelled", resp.Outcome)
+			}
+			if resp.Outcome.Selected != nil {
+				t.Fatalf("selected unexpectedly: %#v", resp.Outcome.Selected)
+			}
+		})
+	}
+}
+
 // --- helpers ---
+
+func newClientAtRoot(t *testing.T, root string) *clientImpl {
+	t.Helper()
+	cl, err := newClientImpl(root)
+	if err != nil {
+		t.Fatalf("newClientImpl: %v", err)
+	}
+	return cl
+}
+
+func mustWriteFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile(%q): %v", path, err)
+	}
+}
+
+func intPtr(v int) *int { return &v }
+
+func stringPtr(v string) *string { return &v }
+
+func assertErrorContains(t *testing.T, err error, want string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("want error containing %q, got nil", want)
+	}
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("err = %v, want substring %q", err, want)
+	}
+}
 
 func containsEnv(env []string, kv string) bool {
 	for _, e := range env {

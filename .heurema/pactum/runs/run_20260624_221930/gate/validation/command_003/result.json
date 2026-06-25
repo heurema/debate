@@ -1,0 +1,12 @@
+{
+  "schema": "pactum.validation_command_result.v1alpha1",
+  "id": "command_003",
+  "command": "go test -count=1 -run '^$' -tags acp_integration ./internal/backend/acp",
+  "started_at": "2026-06-24T22:54:17.983861Z",
+  "finished_at": "2026-06-24T22:54:18.310288Z",
+  "duration_ms": 326,
+  "exit_code": 0,
+  "timed_out": false,
+  "stdout": "gate/validation/command_003/stdout.log",
+  "stderr": "gate/validation/command_003/stderr.log"
+}

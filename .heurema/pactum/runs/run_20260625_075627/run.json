@@ -1,0 +1,22 @@
+{
+  "schema": "pactum.run.v1alpha1",
+  "run_id": "run_20260625_075627",
+  "status": "contract_approved",
+  "task": "Change debate turn prompts from delta-only discussion context to full transcript context so each participant sees the whole chat history on every turn; keep synthesizer invocation after the debate loop, not per round.",
+  "created_at": "2026-06-25T07:56:27.855252Z",
+  "updated_at": "2026-06-25T08:53:00.183066Z",
+  "repo_root": ".",
+  "workspace": ".heurema/pactum",
+  "map_run_id": "map_20260625_075622",
+  "artifacts": {
+    "task": "task.md",
+    "repo_context": "context/repo-context.md",
+    "search_results": "context/search-results.json",
+    "executor_context": "context/executor-context.md",
+    "contract_json": "contract/contract.json",
+    "contract_md": "contract/contract.md",
+    "prompt": "contract/prompt.md",
+    "prompt_manifest": "contract/prompt-manifest.json",
+    "approval": "contract/approval.json"
+  }
+}

@@ -2,6 +2,8 @@ package runner_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,6 +26,24 @@ func fixedResolver(sessions map[string]*mock.Session) runner.Resolver {
 	return func(_ string) (transport.Transport, error) {
 		return mock.NewTransport(sessions), nil
 	}
+}
+
+type countingTransport struct {
+	sessions map[string]*mock.Session
+	opens    map[string]int
+}
+
+func newCountingTransport(sessions map[string]*mock.Session) *countingTransport {
+	return &countingTransport{sessions: sessions, opens: make(map[string]int)}
+}
+
+func (t *countingTransport) Open(_ context.Context, spec transport.Spec) (transport.Session, error) {
+	t.opens[spec.ID]++
+	s, ok := t.sessions[spec.ID]
+	if !ok {
+		return nil, fmt.Errorf("mock: no session configured for id %q", spec.ID)
+	}
+	return s, nil
 }
 
 // makeWorkspace creates a minimal .heurema/debate workspace under a temp dir
@@ -174,6 +194,104 @@ func TestRun_MaxOutcome(t *testing.T) {
 	}
 	if result.Answer == "" {
 		t.Error("expected non-empty answer even on non-converged run")
+	}
+}
+
+func TestRun_SynthesizerCalledOnceWithFinalTranscript(t *testing.T) {
+	workDir := makeWorkspace(t, map[string]string{
+		"alice": echoPersonaContent,
+		"bob":   echoPersonaContent,
+	})
+
+	aliceSess := mock.NewSession([]mock.ScriptedResult{
+		{Result: transport.Result{Content: "A r1"}},
+		{Result: transport.Result{Content: "A r2"}},
+	})
+	bobSess := mock.NewSession([]mock.ScriptedResult{
+		{Result: transport.Result{Content: "B r1"}},
+		{Result: transport.Result{Content: "B r2"}},
+	})
+	synthSess := mock.NewSession([]mock.ScriptedResult{
+		{Result: transport.Result{Content: "synthesis"}},
+	})
+	tr := newCountingTransport(map[string]*mock.Session{
+		"alice":       aliceSess,
+		"bob":         bobSess,
+		"synthesizer": synthSess,
+	})
+
+	result, err := runner.Run(context.Background(), runner.Config{
+		WorkDir:   workDir,
+		Task:      "collect all turns",
+		MaxRounds: 2,
+		Resolver:  func(_ string) (transport.Transport, error) { return tr, nil },
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(result.Turns) != 4 {
+		t.Fatalf("turns = %d, want 4", len(result.Turns))
+	}
+	if tr.opens["synthesizer"] != 1 {
+		t.Fatalf("synthesizer opens = %d, want 1", tr.opens["synthesizer"])
+	}
+
+	prompts := synthSess.Prompts()
+	if len(prompts) != 1 {
+		t.Fatalf("synthesizer prompts = %d, want 1", len(prompts))
+	}
+	for _, want := range []string{
+		"Task: collect all turns",
+		"[Round 1 — alice]\nA r1",
+		"[Round 1 — bob]\nB r1",
+		"[Round 2 — alice]\nA r2",
+		"[Round 2 — bob]\nB r2",
+		"Synthesize the debate:",
+	} {
+		if !strings.Contains(prompts[0], want) {
+			t.Fatalf("synthesizer prompt missing %q\nprompt:\n%s", want, prompts[0])
+		}
+	}
+}
+
+func TestRun_DoesNotSynthesizeAfterDebateError(t *testing.T) {
+	workDir := makeWorkspace(t, map[string]string{
+		"alice": echoPersonaContent,
+		"bob":   echoPersonaContent,
+	})
+
+	sendErr := errors.New("participant failed")
+	aliceSess := mock.NewSession([]mock.ScriptedResult{
+		{Result: transport.Result{Content: "A partial"}},
+	})
+	bobSess := mock.NewSession([]mock.ScriptedResult{
+		{Err: sendErr},
+	})
+	synthSess := mock.NewSession([]mock.ScriptedResult{
+		{Result: transport.Result{Content: "must not be used"}},
+	})
+
+	_, err := runner.Run(context.Background(), runner.Config{
+		WorkDir:   workDir,
+		Task:      "abort before synthesis",
+		MaxRounds: 2,
+		Resolver: fixedResolver(map[string]*mock.Session{
+			"alice":       aliceSess,
+			"bob":         bobSess,
+			"synthesizer": synthSess,
+		}),
+	})
+	if err == nil {
+		t.Fatal("expected participant error, got nil")
+	}
+	if !strings.Contains(err.Error(), sendErr.Error()) {
+		t.Fatalf("error = %v, want to include %q", err, sendErr)
+	}
+	if prompts := synthSess.Prompts(); len(prompts) != 0 {
+		t.Fatalf("synthesizer prompts = %d, want 0: %v", len(prompts), prompts)
+	}
+	if synthSess.Closed() {
+		t.Fatal("synthesizer session was opened on debate error")
 	}
 }
 

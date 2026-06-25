@@ -78,3 +78,17 @@
 - Files: internal/backend/exec/exec.go, internal/backend/exec/exec_test.go, internal/backend/exec/integration_test.go
 - Summary: Reviewed run run_20260624_161104 with gate status needs_review and review status approved. Goal: Invoke agy non-interactively via --print in the exec backend so it works against the real agy CLI (which otherwise defaults to an interactiv...
 - Candidate: runs/run_20260624_161104/memory/memory-candidate.json
+
+### mem_012 - Harden the ACP backend client tool contract so grounded file reads are explic...
+- Run: run_20260624_221930
+- Freshness: fresh
+- Files: internal/backend/acp/acp.go, internal/backend/acp/acp_test.go
+- Summary: Reviewed run run_20260624_221930 with gate status needs_review and review status approved. Goal: Harden the ACP backend client tool contract so grounded file reads are explicitly advertised, root-scoped, and bounded, while non-read opera...
+- Candidate: runs/run_20260624_221930/memory/memory-candidate.json
+
+### mem_013 - Make participant turn prompts chat-like by giving every debater the full tran...
+- Run: run_20260625_075627
+- Freshness: fresh
+- Files: internal/debate/prompt/prompt_test.go, internal/debate/runner/runner_test.go, internal/engine/orchestrate/orchestrate.go, internal/engine/orchestrate/orchestrate_test.go
+- Summary: Reviewed run run_20260625_075627 with gate status needs_review and review status approved. Goal: Make participant turn prompts chat-like by giving every debater the full transcript accumulated so far on every turn, while keeping synthesi...
+- Candidate: runs/run_20260625_075627/memory/memory-candidate.json

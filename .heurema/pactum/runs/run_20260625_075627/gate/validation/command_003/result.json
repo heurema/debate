@@ -1,0 +1,12 @@
+{
+  "schema": "pactum.validation_command_result.v1alpha1",
+  "id": "command_003",
+  "command": "bash -c 'set -euo pipefail; rg --version \u003e/dev/null; forbidden=\"(ContextMode|TranscriptMode|PromptMode|HistoryMode|DeltaMode|FullMode|contextMode|transcriptMode|promptMode|historyMode|deltaMode|fullMode|context[[:space:]_-]?mode|transcript[[:space:]_-]?mode|prompt[[:space:]_-]?mode|history[[:space:]_-]?mode|delta[[:space:]_-]?mode|full[[:space:]_-]?mode)\"; set +e; rg -n --glob \"!*_test.go\" \"\\\"[^\\\"]*$forbidden[^\\\"]*\\\"\" ./cmd/debate; status=$?; set -e; if [ \"$status\" -eq 0 ]; then exit 1; elif [ \"$status\" -gt 1 ]; then exit \"$status\"; fi; set +e; rg -n --glob \"!*_test.go\" \"(yaml|json|toml|mapstructure):\\\"[^\\\"]*$forbidden[^\\\"]*\\\"|frontmatter[^\\n]*$forbidden|$forbidden[^\\n]*frontmatter\" ./cmd/debate ./internal/debate/config ./internal/debate/persona ./internal/debate/runner ./internal/engine/orchestrate; status=$?; set -e; if [ \"$status\" -eq 0 ]; then exit 1; elif [ \"$status\" -gt 1 ]; then exit \"$status\"; fi; set +e; rg -n --glob \"!*_test.go\" \"^(type|func|const|var)[[:space:]]+[A-Z][A-Za-z0-9_]*.*$forbidden|^[[:space:]]+[A-Z][A-Za-z0-9_]*[[:space:]].*$forbidden\" ./internal/debate/runner ./internal/engine/orchestrate ./internal/debate/persona; status=$?; set -e; if [ \"$status\" -eq 0 ]; then exit 1; elif [ \"$status\" -eq 1 ]; then exit 0; else exit \"$status\"; fi'",
+  "started_at": "2026-06-25T08:58:31.443959Z",
+  "finished_at": "2026-06-25T08:58:31.495677Z",
+  "duration_ms": 51,
+  "exit_code": 0,
+  "timed_out": false,
+  "stdout": "gate/validation/command_003/stdout.log",
+  "stderr": "gate/validation/command_003/stderr.log"
+}

@@ -14,7 +14,7 @@ type RenderMode int
 
 const (
 	Delta RenderMode = iota // only turns since the participant last spoke
-	Full                    // entire transcript (for recovery replay)
+	Full                    // entire committed transcript so far
 )
 
 // Participant is one speaker in the debate.
@@ -122,7 +122,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	step := func(ctx context.Context, rc loop.RoundContext) (loop.RoundResult, error) {
 		speakers := cfg.Scheduler.Order(rc, cfg.Participants)
 		for _, p := range speakers {
-			prompt, err := cfg.Prompt(p, tr, rc, Delta)
+			prompt, err := cfg.Prompt(p, tr, rc, Full)
 			if err != nil {
 				return loop.RoundResult{}, fmt.Errorf("orchestrate: PromptBuilder for %q: %w", p.ID, err)
 			}
