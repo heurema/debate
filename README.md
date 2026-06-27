@@ -17,7 +17,8 @@ It gives each participant a persona, collects their arguments round by round, an
 ## What It Does
 
 - Runs a debate from a positional prompt, `--task @file`, `--task -`, or piped stdin.
-- Loads debater personas from `.heurema/debate/personas` and one-level namespaces.
+- Loads Markdown personas from `.heurema/debate/personas` with optional one-level namespaces.
+- Selects panels from a default table, a named table, or an ad-hoc `--with` list.
 - Supports proposer/skeptic style review loops and optional synthesis.
 - Can emit human-readable output or JSON for automation.
 - Keeps backend selection in persona files instead of hard-coding one model.
@@ -64,8 +65,11 @@ After `debate init`, the project-local state lives under `.heurema/debate`:
     personas/
       proposer.md
       skeptic.md
+      reviewers/
+        security.md
     tables/
       default.yml
+      architecture.yml
 ```
 
 Commands that read an existing workspace discover the nearest ancestor containing `.heurema/debate`, starting with the current directory. `debate init` is the exception: it creates the scaffold in the current directory.
@@ -86,6 +90,8 @@ You are the Skeptic. Challenge weak assumptions and identify blocking objections
 
 Required fields are `version: 1`, `model`, `effort`, and a non-empty body. `role` defaults to `debater` and may be `debater` or `synthesizer`. `backend` overrides model-based backend inference, and `tags` are preserved for future selection features. Unknown fields fail fast.
 
+Persona files may live at `personas/<name>.md` or `personas/<namespace>/<name>.md`. The qualified persona ID is the relative path without `.md`, such as `skeptic` or `reviewers/security`. Hidden files and non-Markdown files are ignored. Markdown files nested deeper than one namespace level fail fast.
+
 Tables are explicit and flat under `.heurema/debate/tables`:
 
 ```yaml
@@ -96,7 +102,7 @@ panel:
 # synth: final-judge
 ```
 
-A run without `--with` uses `--table <name>` or `tables/default.yml`. Tables are flat YAML files, and table panel order is preserved.
+A run without `--with` uses `--table <name>` or `tables/default.yml`. Table files require `version: 1` and a non-empty `panel`. The optional `synth` field chooses the synthesizer for that table. Tables are flat YAML files, table names do not contain `/`, and panel order is preserved.
 
 ## Personas
 
@@ -126,6 +132,8 @@ Then select explicit participants. Repeatable `--with` values and comma-separate
 ```
 
 Selectors are deterministic. `namespace/name` is an exact persona ID. A short selector such as `skeptic` first resolves an exact root persona ID when present; otherwise it works only when exactly one loaded persona has that short name. Ambiguous short names fail and list the qualified IDs.
+
+Empty comma entries are rejected, so `--with proposer,` and `--with proposer,,skeptic` fail before any backend session opens.
 
 Selection precedence is:
 
