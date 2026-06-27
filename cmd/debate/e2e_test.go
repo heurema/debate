@@ -239,6 +239,70 @@ func TestE2E_TableFlagSelectsPanel(t *testing.T) {
 	}
 }
 
+func TestCLI_WithSelectorsSupportRepeatableAndCommaSeparatedForms(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		args  []string
+		order []string
+	}{
+		{
+			name:  "repeatable",
+			args:  []string{"--with", "proposer", "--with", "skeptic"},
+			order: []string{"proposer", "skeptic"},
+		},
+		{
+			name:  "comma separated",
+			args:  []string{"--with", "proposer,skeptic"},
+			order: []string{"proposer", "skeptic"},
+		},
+		{
+			name:  "equals comma separated",
+			args:  []string{"--with=proposer,skeptic"},
+			order: []string{"proposer", "skeptic"},
+		},
+		{
+			name:  "mixed repeatable and comma separated",
+			args:  []string{"--with", "proposer,skeptic", "--with", "reviewers/security"},
+			order: []string{"proposer", "skeptic", "reviewers/security"},
+		},
+		{
+			name:  "whitespace around comma tokens",
+			args:  []string{"--with", "proposer, skeptic"},
+			order: []string{"proposer", "skeptic"},
+		},
+		{
+			name:  "whitespace around single token",
+			args:  []string{"--with", " proposer "},
+			order: []string{"proposer"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			workDir := makeSelectorWorkspace(t)
+			args := append([]string{"--json"}, tc.args...)
+			args = append(args, "task")
+
+			var stdout, stderr bytes.Buffer
+			code := parseAndRun(
+				args,
+				&stdout, &stderr, strings.NewReader(""),
+				false, noEnv, echoAll, workDir,
+			)
+
+			if code != 0 {
+				t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr.String())
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("stderr = %q, want empty", stderr.String())
+			}
+			got := speakerOrderFromJSON(t, stdout.Bytes())
+			want := append(append([]string{}, tc.order...), tc.order...)
+			if strings.Join(got, ",") != strings.Join(want, ",") {
+				t.Fatalf("speaker order = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
 func TestCLI_UnknownFlagReportsUsage(t *testing.T) {
 	workDir := makeE2EWorkspace(t)
 	var stdout, stderr bytes.Buffer
@@ -405,6 +469,40 @@ func keysOf(m map[string]json.RawMessage) []string {
 		ks = append(ks, k)
 	}
 	return ks
+}
+
+func makeSelectorWorkspace(t *testing.T) string {
+	t.Helper()
+	workDir := makeE2EWorkspace(t)
+	for _, id := range []string{"proposer", "skeptic", "reviewers/security"} {
+		path := filepath.Join(workDir, ".heurema", "debate", "personas", id+".md")
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		content := "---\nversion: 1\nmodel: echo-local\neffort: low\nbackend: echo\n---\n" +
+			"You are " + id + ". State your position clearly.\n"
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return workDir
+}
+
+func speakerOrderFromJSON(t *testing.T, data []byte) []string {
+	t.Helper()
+	var out struct {
+		Turns []struct {
+			Speaker string `json:"speaker"`
+		} `json:"turns"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("invalid JSON on stdout: %v\nraw: %s", err, string(data))
+	}
+	speakers := make([]string, len(out.Turns))
+	for i, turn := range out.Turns {
+		speakers[i] = turn.Speaker
+	}
+	return speakers
 }
 
 // Additional: --task @file reads the file as task.

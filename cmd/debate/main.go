@@ -69,7 +69,7 @@ type cliDeps struct {
 
 type runCmd struct {
 	Table         string   `name:"table" help:"Table name to run (defaults to default)."`
-	With          []string `name:"with" help:"Persona id to include in panel. Repeatable."`
+	With          []string `name:"with" sep:"none" help:"Add debater persona selectors. Repeat or separate selectors with commas."`
 	SynthOverride string   `name:"synth" help:"Override synthesizer persona id."`
 	TaskFlag      string   `name:"task" help:"Task text, @file, or - for stdin."`
 	MaxRounds     int      `name:"max-rounds" default:"10" help:"Maximum debate rounds."`
@@ -212,6 +212,15 @@ func parseAndRun(
 	return parseAndDispatch(&cmd, args, stdout, stderr, stdin, isTerminal, getEnv, resolver, workDir)
 }
 
+func validateWithSelectorValue(value string) error {
+	for _, part := range strings.Split(value, ",") {
+		if strings.TrimSpace(part) == "" {
+			return fmt.Errorf("--with contains an empty persona selector; remove empty entries or pass one persona per --with")
+		}
+	}
+	return nil
+}
+
 func runDebate(
 	cmd *runCmd,
 	stdout, stderr io.Writer,
@@ -221,6 +230,12 @@ func runDebate(
 	resolver runner.Resolver,
 	workDir string,
 ) int {
+	withList, err := normalizeWithSelectors(cmd.With)
+	if err != nil {
+		fmt.Fprintln(stderr, "error:", err)
+		return 1
+	}
+
 	task, err := assembleTask(cmd.TaskFlag, cmd.Task, stdin)
 	if err != nil {
 		fmt.Fprintln(stderr, "error:", err)
@@ -245,7 +260,7 @@ func runDebate(
 	cfg := runner.Config{
 		WorkDir:       workDir,
 		TableName:     cmd.Table,
-		WithList:      cmd.With,
+		WithList:      withList,
 		SynthOverride: cmd.SynthOverride,
 		Task:          task,
 		MaxRounds:     cmd.MaxRounds,
@@ -293,6 +308,24 @@ func runDebate(
 	}
 
 	return exitCode(result.Outcome.Reason)
+}
+
+func normalizeWithSelectors(values []string) ([]string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+
+	selectors := make([]string, 0, len(values))
+	for _, value := range values {
+		if err := validateWithSelectorValue(value); err != nil {
+			return nil, err
+		}
+		for _, part := range strings.Split(value, ",") {
+			selector := strings.TrimSpace(part)
+			selectors = append(selectors, selector)
+		}
+	}
+	return selectors, nil
 }
 
 // outcomeString normalises the loop reason to a user-facing string.

@@ -17,6 +17,8 @@ for needle in \
   'version: 1' \
   '--table' \
   '--with' \
+  '--with proposer --with skeptic' \
+  '--with proposer,skeptic' \
   '--synth' \
   'namespace/name'
 do

@@ -254,7 +254,14 @@ Participant selectors are deterministic:
 - selectors without `/` otherwise resolve by short name only when exactly one candidate exists
 - zero matches and ambiguous short names fail with actionable errors
 
-Panel resolution uses `--with` in the provided order when present. Otherwise it uses `--table <name>` or `tables/default.yml`. Naming a synthesizer-role persona or the same resolved persona more than once in a panel fails before any backend session opens.
+Panel resolution uses `--with` in the provided order when present. Repeatable flags and comma-separated selectors are equivalent ways to provide the ordered explicit panel:
+
+```sh
+debate "Pick the safest migration path" --with proposer --with skeptic
+debate "Pick the safest migration path" --with proposer,skeptic
+```
+
+Otherwise panel resolution uses `--table <name>` or `tables/default.yml`. Naming a synthesizer-role persona or the same resolved persona more than once in a panel fails before any backend session opens.
 
 ## 7. Synthesizer
 
@@ -314,7 +321,7 @@ Run flags:
 
 ```text
 --table <name>        Select a flat table from .heurema/debate/tables.
---with <persona>      Add a debater persona. Repeat for multiple participants.
+--with <persona>      Add debater persona selectors. Repeat or separate selectors with commas.
 --synth <persona>     Use a synthesizer persona for the final answer.
 --task <value>        Read task from inline text, @file, or - for stdin.
 --max-rounds <n>      Limit debate rounds. Defaults to 10.

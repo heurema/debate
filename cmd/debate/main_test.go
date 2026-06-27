@@ -71,6 +71,11 @@ func TestE2E_ConfigErrorsDoNotResolveBackends(t *testing.T) {
 			args:    []string{"--with", "alice", "--with", "alice", "task"},
 			wantErr: "duplicate persona",
 		},
+		{
+			name:    "duplicate with comma-separated override",
+			args:    []string{"--with", "alice,alice", "task"},
+			wantErr: "duplicate persona",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			workDir := makeE2EWorkspace(t)
@@ -98,6 +103,52 @@ func TestE2E_ConfigErrorsDoNotResolveBackends(t *testing.T) {
 			}
 			if !strings.Contains(stderr.String(), tc.wantErr) {
 				t.Fatalf("stderr = %q, want to contain %q", stderr.String(), tc.wantErr)
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("stdout = %q, want empty", stdout.String())
+			}
+		})
+	}
+}
+
+func TestCLI_WithEmptySelectorsFailBeforeResolver(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{name: "empty", args: []string{"--with", "", "task"}},
+		{name: "whitespace only", args: []string{"--with", "   ", "task"}},
+		{name: "comma only", args: []string{"--with", ",", "task"}},
+		{name: "trailing comma", args: []string{"--with", "proposer,", "task"}},
+		{name: "leading comma", args: []string{"--with", ",skeptic", "task"}},
+		{name: "repeated comma", args: []string{"--with", "proposer,,skeptic", "task"}},
+		{name: "whitespace entry", args: []string{"--with", "proposer, ,skeptic", "task"}},
+		{name: "equals comma only", args: []string{"--with=,", "task"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			workDir := makeE2EWorkspace(t)
+			var resolverCalls int
+			resolver := func(backend string) (transport.Transport, error) {
+				resolverCalls++
+				return nil, fmt.Errorf("resolver should not be called for backend %q", backend)
+			}
+
+			var stdout, stderr bytes.Buffer
+			code := parseAndRun(
+				tc.args,
+				&stdout, &stderr, strings.NewReader(""),
+				false, noEnv, resolver, workDir,
+			)
+
+			if code != 1 {
+				t.Fatalf("exit code = %d, want 1; stderr: %s", code, stderr.String())
+			}
+			if resolverCalls != 0 {
+				t.Fatalf("resolver calls = %d, want 0", resolverCalls)
+			}
+			errText := stderr.String()
+			if !strings.Contains(errText, "--with") || !strings.Contains(errText, "empty persona selector") {
+				t.Fatalf("stderr = %q, want to mention --with and empty persona selector", errText)
 			}
 			if stdout.Len() != 0 {
 				t.Fatalf("stdout = %q, want empty", stdout.String())

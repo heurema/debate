@@ -118,10 +118,11 @@ Create a synthesizer persona:
 ./debate new final-judge --role synthesizer
 ```
 
-Then select explicit participants:
+Then select explicit participants. Repeatable `--with` values and comma-separated selectors are equivalent conveniences for providing the ordered explicit panel:
 
 ```sh
 ./debate "Pick the safest migration path" --with proposer --with skeptic --synth final-judge
+./debate "Pick the safest migration path" --with proposer,skeptic --synth final-judge
 ```
 
 Selectors are deterministic. `namespace/name` is an exact persona ID. A short selector such as `skeptic` first resolves an exact root persona ID when present; otherwise it works only when exactly one loaded persona has that short name. Ambiguous short names fail and list the qualified IDs.
@@ -155,7 +156,7 @@ Run flags:
 
 ```text
 --table <name>        Select a flat table from .heurema/debate/tables.
---with <persona>      Add a debater persona. Repeat for multiple participants.
+--with <persona>      Add debater persona selectors. Repeat or separate selectors with commas.
 --synth <persona>     Use a synthesizer persona for the final answer.
 --task <value>        Read task from inline text, @file, or - for stdin.
 --max-rounds <n>      Limit debate rounds. Defaults to 10.
