@@ -54,26 +54,28 @@ Expected result:
 
 ## 3. Personas And Workspace Loading
 
-Load `.heurema/debate` from the project tree and resolve the active panel.
+Load `.heurema/debate` from the project tree and resolve the active table, panel, and synthesizer.
 
 Scope:
 
 - walk-up discovery for `.heurema/debate`
-- persona parser for Markdown plus YAML front matter
-- strict front matter validation
-- optional `config.yml` with `table`
-- default panel from all `role: debater` personas
-- `--with` override
-- synthesizer resolution
+- persona parser for Markdown plus YAML front matter with `version: 1`
+- recursive persona discovery for root personas and one namespace level
+- strict path-safe persona segment validation
+- flat `tables/<name>.yml` loading with `version: 1`
+- deterministic selector resolution for full IDs, exact root IDs, and unambiguous short names
+- `--with` panel override
+- synthesizer resolution from override, table, persona selector, or built-in default
 - backend inference from model names
 
 Expected result:
 
 - valid fixture workspaces load
 - broken personas fail fast
-- unknown config keys fail fast
+- broken tables fail fast
 - missing workspace returns a clear error
 - synthesizer-role personas cannot be placed in the debater panel
+- debater-role personas cannot be used as synthesizers
 
 ## 4. CLI And Synthesizer On Test Backends
 
@@ -81,14 +83,14 @@ Connect the CLI to the product runner and engine while still allowing determinis
 
 Scope:
 
-- task assembly from positional args, `--task`, files, stdin, and pipes
+- task assembly from positional args, `--task`, files, `--task -`, stdin, and pipes
 - runner config construction
 - live trace to stderr when appropriate
 - stdout final answer
 - JSON output mode
 - exit-code contract
 - built-in default synthesizer
-- `--synth`, `--max-rounds`, `--json`, `-q`, `--sealed`
+- `--table`, `--synth`, `--max-rounds`, `--json`, `-q`, `--sealed`
 
 Expected result:
 
@@ -143,13 +145,14 @@ Scope:
 
 - `debate init`
 - `debate new <name>`
+- `debate new <namespace>/<name>`
 - `debate new --role synthesizer <name>`
 - persona-name validation
 - no clobbering existing files
 
 Expected result:
 
-- `debate init` creates `.heurema/debate/personas/proposer.md` and `skeptic.md`
+- `debate init` creates versioned proposer/skeptic personas and `tables/default.yml`
 - generated personas parse and validate
 - repeated init skips existing files
 - `debate new` discovers the workspace and creates exactly one persona file

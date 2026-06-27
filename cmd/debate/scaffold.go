@@ -17,6 +17,7 @@ const (
 )
 
 const proposerTemplate = `---
+version: 1
 role: debater
 model: claude-haiku-4-5
 effort: medium
@@ -25,11 +26,18 @@ You are the Proposer. Defend the proposition with clear arguments and respond to
 `
 
 const skepticTemplate = `---
+version: 1
 role: debater
 model: claude-haiku-4-5
 effort: medium
 ---
 You are the Skeptic. Challenge the proposition by identifying weaknesses, counter-examples, and unresolved assumptions. Be constructive and specific.
+`
+
+const defaultTableTemplate = `version: 1
+panel:
+  - proposer
+  - skeptic
 `
 
 type initCmd struct {
@@ -79,7 +87,12 @@ func runInit(cmd *initCmd, stdout, stderr io.Writer, workDir string) int {
 
 	debDir := filepath.Join(workDir, ".heurema", "debate")
 	personasDir := filepath.Join(debDir, "personas")
+	tablesDir := filepath.Join(debDir, "tables")
 	if err := os.MkdirAll(personasDir, 0755); err != nil {
+		fmt.Fprintln(stderr, "error:", err)
+		return 1
+	}
+	if err := os.MkdirAll(tablesDir, 0755); err != nil {
 		fmt.Fprintln(stderr, "error:", err)
 		return 1
 	}
@@ -90,6 +103,7 @@ func runInit(cmd *initCmd, stdout, stderr io.Writer, workDir string) int {
 	}{
 		{filepath.Join(personasDir, "proposer.md"), proposerTemplate},
 		{filepath.Join(personasDir, "skeptic.md"), skepticTemplate},
+		{filepath.Join(tablesDir, "default.yml"), defaultTableTemplate},
 	}
 
 	for _, f := range files {
@@ -131,8 +145,9 @@ func runNew(cmd *newCmd, stdout, stderr io.Writer, workDir string) int {
 		return 1
 	}
 
-	name := cmd.Name[0]
-	if err := validatePersonaName(name); err != nil {
+	personaID := cmd.Name[0]
+	segments, err := validatePersonaID(personaID)
+	if err != nil {
 		fmt.Fprintln(stderr, "error:", err)
 		return 1
 	}
@@ -149,19 +164,24 @@ func runNew(cmd *newCmd, stdout, stderr io.Writer, workDir string) int {
 	}
 
 	personasDir := filepath.Join(debDir, "personas")
-	if err := os.MkdirAll(personasDir, 0755); err != nil {
+	targetDir := personasDir
+	if len(segments) == 2 {
+		targetDir = filepath.Join(personasDir, segments[0])
+	}
+	if err := os.MkdirAll(targetDir, 0755); err != nil {
 		fmt.Fprintln(stderr, "error:", err)
 		return 1
 	}
 
-	personaPath := filepath.Join(personasDir, name+".md")
-	created, err := writeIfAbsent(personaPath, buildPersonaTemplate(name, cmd.Role))
+	name := segments[len(segments)-1]
+	personaPath := filepath.Join(targetDir, name+".md")
+	created, err := writeIfAbsent(personaPath, buildPersonaTemplate(personaID, cmd.Role))
 	if err != nil {
 		fmt.Fprintln(stderr, "error:", err)
 		return 1
 	}
 	if !created {
-		fmt.Fprintf(stderr, "error: persona %q already exists: %s\n", name, personaPath)
+		fmt.Fprintf(stderr, "error: persona %q already exists: %s\n", personaID, personaPath)
 		return 1
 	}
 	fmt.Fprintln(stdout, "created", personaPath)
@@ -175,24 +195,32 @@ func printNewUsage(stderr io.Writer) {
 	fmt.Fprintln(stderr, "        persona role (debater|synthesizer) (default \"debater\")")
 }
 
-// validatePersonaName rejects names that are not simple identifiers.
-// Only letters, digits, hyphens, and underscores are allowed to prevent path traversal.
-func validatePersonaName(name string) error {
-	if name == "" {
-		return fmt.Errorf("persona name must not be empty")
+// validatePersonaID rejects IDs outside the v1 root-or-one-namespace form.
+func validatePersonaID(id string) ([]string, error) {
+	if id == "" {
+		return nil, fmt.Errorf("persona name must not be empty")
 	}
-	for _, c := range name {
-		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-			(c >= '0' && c <= '9') || c == '_' || c == '-') {
-			return fmt.Errorf("persona name %q must contain only letters, digits, hyphens, and underscores", name)
+	if filepath.IsAbs(id) {
+		return nil, fmt.Errorf("persona name %q must be relative", id)
+	}
+	if strings.Contains(id, `\`) {
+		return nil, fmt.Errorf("persona name %q must use '/' as the namespace separator", id)
+	}
+	segments := strings.Split(id, "/")
+	if len(segments) > 2 {
+		return nil, fmt.Errorf("persona name %q is too deep; use name or namespace/name", id)
+	}
+	for _, segment := range segments {
+		if !config.ValidSegment(segment) {
+			return nil, fmt.Errorf("persona name %q must use non-empty segments containing only letters, digits, hyphens, and underscores", id)
 		}
 	}
-	return nil
+	return segments, nil
 }
 
 // buildPersonaTemplate returns a starter persona file for name with the given role.
 func buildPersonaTemplate(name, role string) string {
-	return fmt.Sprintf("---\nrole: %s\nmodel: %s\neffort: %s\n---\nYou are %s. Edit this system prompt to describe the persona's role and perspective.\n",
+	return fmt.Sprintf("---\nversion: 1\nrole: %s\nmodel: %s\neffort: %s\n---\nYou are %s. Edit this system prompt to describe the persona's role and perspective.\n",
 		role, scaffoldModel, scaffoldEffort, name)
 }
 

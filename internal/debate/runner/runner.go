@@ -21,6 +21,7 @@ type Resolver func(backend string) (transport.Transport, error)
 // Config is the full input to Run.
 type Config struct {
 	WorkDir       string                 // start dir for .heurema/debate discovery
+	TableName     string                 // --table: selected table name
 	WithList      []string               // --with: panel selector override
 	SynthOverride string                 // --synth: synthesizer override
 	Task          string                 // assembled task text (must be non-empty)
@@ -56,7 +57,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		maxRounds = 10
 	}
 
-	ws, err := config.Load(cfg.WorkDir, cfg.WithList, cfg.SynthOverride)
+	ws, err := config.Load(cfg.WorkDir, cfg.TableName, cfg.WithList, cfg.SynthOverride)
 	if err != nil {
 		return Result{}, err
 	}

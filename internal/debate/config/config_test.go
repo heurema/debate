@@ -7,10 +7,9 @@ import (
 	"testing"
 
 	"github.com/heurema/debate/internal/debate/config"
+	"github.com/heurema/debate/internal/debate/persona"
 )
 
-// makeDebateDir creates a .heurema/debate directory under a temp root and
-// writes the given files relative to .heurema/debate. Returns the temp root.
 func makeDebateDir(t *testing.T, files map[string]string) string {
 	t.Helper()
 	root := t.TempDir()
@@ -28,6 +27,7 @@ func makeDebateDir(t *testing.T, files map[string]string) string {
 }
 
 const alicePersona = `---
+version: 1
 model: claude-sonnet-4-6
 effort: high
 ---
@@ -35,6 +35,7 @@ You are Alice, a careful logical reasoner.
 `
 
 const bobPersona = `---
+version: 1
 model: claude-opus-4-8
 effort: medium
 ---
@@ -42,6 +43,7 @@ You are Bob, a pragmatic problem solver.
 `
 
 const synthPersona = `---
+version: 1
 role: synthesizer
 model: claude-haiku-4-5
 effort: low
@@ -49,7 +51,12 @@ effort: low
 You are the synthesizer. Summarize the discussion.
 `
 
-// TestDiscover_FindsFromChildDir verifies that Discover walks up to find .heurema/debate.
+const defaultTable = `version: 1
+panel:
+  - alice
+  - bob
+`
+
 func TestDiscover_FindsFromChildDir(t *testing.T) {
 	root := makeDebateDir(t, map[string]string{
 		"personas/alice.md": alicePersona,
@@ -68,7 +75,6 @@ func TestDiscover_FindsFromChildDir(t *testing.T) {
 	}
 }
 
-// TestDiscover_MissingDir verifies Discover returns an error when no .heurema/debate exists.
 func TestDiscover_MissingDir(t *testing.T) {
 	tmp := t.TempDir()
 	_, err := config.Discover(tmp)
@@ -77,21 +83,19 @@ func TestDiscover_MissingDir(t *testing.T) {
 	}
 }
 
-// TestLoad_ValidWorkspace loads a workspace with two debaters and a synthesizer persona.
-func TestLoad_ValidWorkspace(t *testing.T) {
+func TestLoad_DefaultTablePreservesPanelOrder(t *testing.T) {
 	root := makeDebateDir(t, map[string]string{
 		"personas/alice.md":       alicePersona,
 		"personas/bob.md":         bobPersona,
 		"personas/synthesizer.md": synthPersona,
-		"context.md":              "# Discussion context\n\nThis is the baseline.",
-		"config.yml":              "table:\n  - alice\n  - bob\n",
+		"tables/default.yml":      defaultTable,
 	})
-	ws, err := config.Load(root, nil, "")
+	ws, err := config.Load(root, "", nil, "")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 	if len(ws.Panel) != 2 {
-		t.Errorf("Panel len = %d, want 2", len(ws.Panel))
+		t.Fatalf("Panel len = %d, want 2", len(ws.Panel))
 	}
 	if ws.Panel[0].ID != "alice" || ws.Panel[1].ID != "bob" {
 		t.Errorf("Panel IDs = [%s, %s], want [alice, bob]", ws.Panel[0].ID, ws.Panel[1].ID)
@@ -99,258 +103,450 @@ func TestLoad_ValidWorkspace(t *testing.T) {
 	if ws.Synthesizer.ID != "synthesizer" {
 		t.Errorf("Synthesizer ID = %q, want synthesizer", ws.Synthesizer.ID)
 	}
-	if ws.Synthesizer.Role != "synthesizer" {
-		t.Errorf("Synthesizer Role = %q, want synthesizer", ws.Synthesizer.Role)
-	}
 }
 
-// TestLoad_DefaultPanel verifies that with no config table and no withList, all debaters are used.
-func TestLoad_DefaultPanel(t *testing.T) {
+func TestLoad_SelectedTableAndSynth(t *testing.T) {
 	root := makeDebateDir(t, map[string]string{
-		"personas/bob.md":   bobPersona,
-		"personas/alice.md": alicePersona,
+		"personas/alice.md":     alicePersona,
+		"personas/bob.md":       bobPersona,
+		"personas/custom.md":    synthPersona,
+		"tables/default.yml":    defaultTable,
+		"tables/alternate.yml":  "version: 1\npanel:\n  - bob\n  - alice\nsynth: custom\n",
+		"tables/not-a-table.md": "ignored\n",
+		"tables/.hidden.yml":    "not parsed\n",
 	})
-	ws, err := config.Load(root, nil, "")
+	ws, err := config.Load(root, "alternate", nil, "")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
-	}
-	// Lexicographic order: alice < bob
-	if len(ws.Panel) != 2 {
-		t.Fatalf("Panel len = %d, want 2", len(ws.Panel))
-	}
-	if ws.Panel[0].ID != "alice" || ws.Panel[1].ID != "bob" {
-		t.Errorf("Panel = [%s, %s], want [alice, bob]", ws.Panel[0].ID, ws.Panel[1].ID)
-	}
-}
-
-// TestLoad_WithListOverridesConfig verifies explicit withList takes precedence and preserves order.
-func TestLoad_WithListOverridesConfig(t *testing.T) {
-	root := makeDebateDir(t, map[string]string{
-		"personas/alice.md": alicePersona,
-		"personas/bob.md":   bobPersona,
-		"config.yml":        "table:\n  - alice\n",
-	})
-	ws, err := config.Load(root, []string{"bob", "alice"}, "")
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if len(ws.Panel) != 2 {
-		t.Fatalf("Panel len = %d, want 2", len(ws.Panel))
 	}
 	if ws.Panel[0].ID != "bob" || ws.Panel[1].ID != "alice" {
-		t.Errorf("Panel = [%s, %s], want [bob, alice]", ws.Panel[0].ID, ws.Panel[1].ID)
+		t.Errorf("Panel IDs = [%s, %s], want [bob, alice]", ws.Panel[0].ID, ws.Panel[1].ID)
+	}
+	if ws.Synthesizer.ID != "custom" {
+		t.Errorf("Synthesizer ID = %q, want custom", ws.Synthesizer.ID)
 	}
 }
 
-// TestLoad_DefaultSynthesizer verifies the built-in default synthesizer values.
-func TestLoad_DefaultSynthesizer(t *testing.T) {
+func TestLoad_WithListOverridesOnlyPanel(t *testing.T) {
 	root := makeDebateDir(t, map[string]string{
-		"personas/alice.md": alicePersona,
+		"personas/alice.md":    alicePersona,
+		"personas/bob.md":      bobPersona,
+		"personas/custom.md":   synthPersona,
+		"tables/default.yml":   defaultTable,
+		"tables/selected.yml":  "version: 1\npanel:\n  - alice\nsynth: custom\n",
+		"personas/notes.txt":   "ignored\n",
+		"personas/.hidden.md":  "ignored\n",
+		"personas/team/readme": "ignored\n",
 	})
-	ws, err := config.Load(root, nil, "")
+	ws, err := config.Load(root, "selected", []string{"bob", "alice"}, "")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	s := ws.Synthesizer
-	if s.Role != "synthesizer" {
-		t.Errorf("default synth Role = %q, want synthesizer", s.Role)
+	if ws.Panel[0].ID != "bob" || ws.Panel[1].ID != "alice" {
+		t.Errorf("Panel IDs = [%s, %s], want [bob, alice]", ws.Panel[0].ID, ws.Panel[1].ID)
 	}
-	if s.Model != "claude-haiku-4-5" {
-		t.Errorf("default synth Model = %q, want claude-haiku-4-5", s.Model)
-	}
-	if s.Effort != "low" {
-		t.Errorf("default synth Effort = %q, want low", s.Effort)
-	}
-	if s.Backend != "claude-agent-acp" {
-		t.Errorf("default synth Backend = %q, want claude-agent-acp", s.Backend)
-	}
-	if s.System == "" {
-		t.Error("default synth System must be non-empty")
+	if ws.Synthesizer.ID != "custom" {
+		t.Errorf("Synthesizer ID = %q, want custom", ws.Synthesizer.ID)
 	}
 }
 
-// TestLoad_SynthOverride verifies an explicit synthesizer override.
-func TestLoad_SynthOverride(t *testing.T) {
+func TestLoad_WithListCanRunWithoutTables(t *testing.T) {
+	root := makeDebateDir(t, map[string]string{
+		"personas/alice.md": alicePersona,
+	})
+	ws, err := config.Load(root, "", []string{"alice"}, "")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if ws.Panel[0].ID != "alice" {
+		t.Errorf("Panel ID = %q, want alice", ws.Panel[0].ID)
+	}
+	if ws.Synthesizer.ID != "synthesizer" {
+		t.Errorf("Synthesizer ID = %q, want built-in synthesizer", ws.Synthesizer.ID)
+	}
+}
+
+func TestLoad_NamespacedPersonasUseFullIDs(t *testing.T) {
+	root := makeDebateDir(t, map[string]string{
+		"personas/team/alice.md": alicePersona,
+		"personas/bob.md":        bobPersona,
+		"tables/default.yml":     "version: 1\npanel:\n  - team/alice\n  - bob\n",
+	})
+	ws, err := config.Load(root, "", nil, "")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if ws.Panel[0].ID != "team/alice" || ws.Panel[1].ID != "bob" {
+		t.Errorf("Panel IDs = [%s, %s], want [team/alice, bob]", ws.Panel[0].ID, ws.Panel[1].ID)
+	}
+}
+
+func TestLoad_ShortSelectorPrefersExactRootPersona(t *testing.T) {
+	root := makeDebateDir(t, map[string]string{
+		"personas/alice.md":      alicePersona,
+		"personas/red/alice.md":  bobPersona,
+		"personas/blue/alice.md": bobPersona,
+		"personas/bob.md":        bobPersona,
+		"tables/default.yml":     "version: 1\npanel:\n  - alice\n  - red/alice\n  - blue/alice\n  - bob\n",
+	})
+	ws, err := config.Load(root, "", nil, "")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := []string{"alice", "red/alice", "blue/alice", "bob"}
+	if got := personaIDs(ws.Panel); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("Panel IDs = %v, want %v", got, want)
+	}
+}
+
+func TestLoad_ShortSelectorResolvesSingleNamespacedCandidate(t *testing.T) {
+	root := makeDebateDir(t, map[string]string{
+		"personas/team/alice.md": alicePersona,
+		"tables/default.yml":     "version: 1\npanel:\n  - alice\n",
+	})
+	ws, err := config.Load(root, "", nil, "")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if ws.Panel[0].ID != "team/alice" {
+		t.Fatalf("Panel ID = %q, want team/alice", ws.Panel[0].ID)
+	}
+}
+
+func TestLoad_ShortSelectorAmbiguityListsQualifiedIDs(t *testing.T) {
+	root := makeDebateDir(t, map[string]string{
+		"personas/red/alice.md":  alicePersona,
+		"personas/blue/alice.md": bobPersona,
+		"tables/default.yml":     "version: 1\npanel:\n  - alice\n",
+	})
+	_, err := config.Load(root, "", nil, "")
+	if err == nil {
+		t.Fatal("expected ambiguous selector error, got nil")
+	}
+	want := `panel: selector "alice" is ambiguous; use a qualified persona ID: blue/alice, red/alice`
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestLoad_PanelRejectsDuplicateResolvedPersonas(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		files    map[string]string
+		withList []string
+	}{
+		{
+			name: "table panel",
+			files: map[string]string{
+				"personas/alice.md":  alicePersona,
+				"tables/default.yml": "version: 1\npanel:\n  - alice\n  - alice\n",
+			},
+		},
+		{
+			name: "table panel equivalent selectors",
+			files: map[string]string{
+				"personas/team/alice.md": alicePersona,
+				"tables/default.yml":     "version: 1\npanel:\n  - alice\n  - team/alice\n",
+			},
+		},
+		{
+			name: "with override equivalent selectors",
+			files: map[string]string{
+				"personas/alice.md": alicePersona,
+			},
+			withList: []string{"alice", "alice"},
+		},
+		{
+			name: "with override root short and qualified duplicate",
+			files: map[string]string{
+				"personas/team/alice.md": alicePersona,
+			},
+			withList: []string{"alice", "team/alice"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := makeDebateDir(t, tc.files)
+			_, err := config.Load(root, "", tc.withList, "")
+			if err == nil {
+				t.Fatal("expected duplicate panel error, got nil")
+			}
+			if !strings.Contains(err.Error(), "duplicate persona") {
+				t.Fatalf("error should mention duplicate persona: %v", err)
+			}
+		})
+	}
+}
+
+func TestLoad_MissingSelectorsNameSelector(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		files         map[string]string
+		withList      []string
+		synthOverride string
+		wantSelector  string
+	}{
+		{
+			name: "table panel",
+			files: map[string]string{
+				"personas/alice.md":  alicePersona,
+				"tables/default.yml": "version: 1\npanel:\n  - missing\n",
+			},
+			wantSelector: "missing",
+		},
+		{
+			name: "with override",
+			files: map[string]string{
+				"personas/alice.md": alicePersona,
+			},
+			withList:     []string{"missing"},
+			wantSelector: "missing",
+		},
+		{
+			name: "table synth",
+			files: map[string]string{
+				"personas/alice.md":  alicePersona,
+				"tables/default.yml": "version: 1\npanel:\n  - alice\nsynth: missing\n",
+			},
+			wantSelector: "missing",
+		},
+		{
+			name: "synth override",
+			files: map[string]string{
+				"personas/alice.md":  alicePersona,
+				"tables/default.yml": "version: 1\npanel:\n  - alice\n",
+			},
+			synthOverride: "missing",
+			wantSelector:  "missing",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := makeDebateDir(t, tc.files)
+			_, err := config.Load(root, "", tc.withList, tc.synthOverride)
+			if err == nil {
+				t.Fatal("expected missing selector error, got nil")
+			}
+			if !strings.Contains(err.Error(), `selector "`+tc.wantSelector+`" did not match any persona`) {
+				t.Fatalf("error should name missing selector %q: %v", tc.wantSelector, err)
+			}
+		})
+	}
+}
+
+func TestLoad_DefaultSynthesizerAmbiguityFails(t *testing.T) {
+	root := makeDebateDir(t, map[string]string{
+		"personas/alice.md":               alicePersona,
+		"personas/red/synthesizer.md":     synthPersona,
+		"personas/blue/synthesizer.md":    synthPersona,
+		"tables/default.yml":              "version: 1\npanel:\n  - alice\n",
+		"personas/blue/ordinary-note.txt": "ignored\n",
+	})
+	_, err := config.Load(root, "", nil, "")
+	if err == nil {
+		t.Fatal("expected ambiguous default synthesizer error, got nil")
+	}
+	if !strings.Contains(err.Error(), "ambiguous") {
+		t.Errorf("error should mention ambiguity: %v", err)
+	}
+}
+
+func TestLoad_PanelRejectsSynthesizerRole(t *testing.T) {
 	root := makeDebateDir(t, map[string]string{
 		"personas/alice.md":       alicePersona,
 		"personas/synthesizer.md": synthPersona,
+		"tables/default.yml":      "version: 1\npanel:\n  - alice\n  - synthesizer\n",
 	})
-	ws, err := config.Load(root, nil, "synthesizer")
+	_, err := config.Load(root, "", nil, "")
+	if err == nil {
+		t.Fatal("expected error when panel names synthesizer-role persona, got nil")
+	}
+	if !strings.Contains(err.Error(), "cannot be in the debater panel") {
+		t.Errorf("error should mention debater panel role rejection: %v", err)
+	}
+}
+
+func TestLoad_SynthRejectsDebaterRole(t *testing.T) {
+	root := makeDebateDir(t, map[string]string{
+		"personas/alice.md":  alicePersona,
+		"personas/bob.md":    bobPersona,
+		"tables/default.yml": "version: 1\npanel:\n  - alice\nsynth: bob\n",
+	})
+	_, err := config.Load(root, "", nil, "")
+	if err == nil {
+		t.Fatal("expected error when synth names debater-role persona, got nil")
+	}
+	if !strings.Contains(err.Error(), "cannot be used as synthesizer") {
+		t.Errorf("error should mention synthesizer role rejection: %v", err)
+	}
+}
+
+func TestLoad_DefaultSynthesizerRejectsRootDebaterPersona(t *testing.T) {
+	root := makeDebateDir(t, map[string]string{
+		"personas/alice.md":       alicePersona,
+		"personas/synthesizer.md": alicePersona,
+		"tables/default.yml":      "version: 1\npanel:\n  - alice\n",
+	})
+	_, err := config.Load(root, "", nil, "")
+	if err == nil {
+		t.Fatal("expected root debater synthesizer error, got nil")
+	}
+	if !strings.Contains(err.Error(), `persona "synthesizer" has role debater`) {
+		t.Fatalf("error should reject root debater synthesizer before built-in fallback: %v", err)
+	}
+}
+
+func TestLoad_DefaultSynthesizerPrefersRootOverNamespaced(t *testing.T) {
+	root := makeDebateDir(t, map[string]string{
+		"personas/alice.md":            alicePersona,
+		"personas/synthesizer.md":      synthPersona,
+		"personas/team/synthesizer.md": synthPersona,
+		"tables/default.yml":           "version: 1\npanel:\n  - alice\n",
+	})
+	ws, err := config.Load(root, "", nil, "")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 	if ws.Synthesizer.ID != "synthesizer" {
-		t.Errorf("Synthesizer ID = %q, want synthesizer", ws.Synthesizer.ID)
+		t.Fatalf("Synthesizer ID = %q, want synthesizer", ws.Synthesizer.ID)
 	}
 }
 
-// TestLoad_SynthOverrideMissing verifies a missing synth override is a fail-fast error.
-func TestLoad_SynthOverrideMissing(t *testing.T) {
+func TestLoad_SynthOverrideWinsOverTable(t *testing.T) {
 	root := makeDebateDir(t, map[string]string{
-		"personas/alice.md": alicePersona,
+		"personas/alice.md":    alicePersona,
+		"personas/table.md":    synthPersona,
+		"personas/override.md": synthPersona,
+		"tables/default.yml":   "version: 1\npanel:\n  - alice\nsynth: table\n",
 	})
-	_, err := config.Load(root, nil, "nosuchpersona")
-	if err == nil {
-		t.Fatal("expected error for missing synthesizer override, got nil")
-	}
-	if !strings.Contains(err.Error(), "nosuchpersona") {
-		t.Errorf("error should name the missing persona: %v", err)
-	}
-}
-
-// TestLoad_NoContextMD verifies that context.md is not required; its presence or absence does not affect loading.
-func TestLoad_NoContextMD(t *testing.T) {
-	root := makeDebateDir(t, map[string]string{
-		"personas/alice.md": alicePersona,
-	})
-	_, err := config.Load(root, nil, "")
+	ws, err := config.Load(root, "", nil, "override")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+	if ws.Synthesizer.ID != "override" {
+		t.Errorf("Synthesizer ID = %q, want override", ws.Synthesizer.ID)
+	}
 }
 
-// TestLoad_ContextMDIgnored verifies that a context.md present in a workspace is silently ignored.
-func TestLoad_ContextMDIgnored(t *testing.T) {
+func TestLoad_MissingTablesWithoutWithFails(t *testing.T) {
 	root := makeDebateDir(t, map[string]string{
 		"personas/alice.md": alicePersona,
-		"context.md":        "# Some context that should be ignored.\n",
 	})
-	_, err := config.Load(root, nil, "")
-	if err != nil {
-		t.Fatalf("Load: %v (context.md should be silently ignored)", err)
+	_, err := config.Load(root, "", nil, "")
+	if err == nil {
+		t.Fatal("expected missing tables error, got nil")
+	}
+	if !strings.Contains(err.Error(), "tables") {
+		t.Errorf("error should mention tables: %v", err)
 	}
 }
 
-// TestLoad_UnknownConfigKey verifies an unknown key in config.yml is a fail-fast error.
-func TestLoad_UnknownConfigKey(t *testing.T) {
+func TestLoad_ConfigYMLIsIgnoredAndDoesNotProvideTable(t *testing.T) {
 	root := makeDebateDir(t, map[string]string{
 		"personas/alice.md": alicePersona,
-		"config.yml":        "table:\n  - alice\nunknown_key: oops\n",
+		"config.yml":        "table:\n  - alice\n",
 	})
-	_, err := config.Load(root, nil, "")
+	_, err := config.Load(root, "", nil, "")
 	if err == nil {
-		t.Fatal("expected error for unknown config key, got nil")
+		t.Fatal("expected missing tables error despite config.yml, got nil")
+	}
+	if !strings.Contains(err.Error(), "tables") {
+		t.Errorf("error should mention tables: %v", err)
 	}
 }
 
-// TestLoad_UnknownFrontmatterKey verifies a persona with an unknown frontmatter key fails.
-func TestLoad_UnknownFrontmatterKey(t *testing.T) {
-	root := makeDebateDir(t, map[string]string{
-		"personas/alice.md": `---
-model: claude-sonnet-4-6
-effort: high
-mystery: field
----
-Alice's system prompt.
-`,
-	})
-	_, err := config.Load(root, nil, "")
-	if err == nil {
-		t.Fatal("expected error for unknown frontmatter key, got nil")
-	}
-}
-
-// TestLoad_MissingModel verifies a persona with no model fails.
-func TestLoad_MissingModel(t *testing.T) {
-	root := makeDebateDir(t, map[string]string{
-		"personas/alice.md": `---
-effort: high
----
-Alice's system prompt.
-`,
-	})
-	_, err := config.Load(root, nil, "")
-	if err == nil {
-		t.Fatal("expected error for missing model, got nil")
-	}
-	if !strings.Contains(err.Error(), "model") {
-		t.Errorf("error should mention model: %v", err)
-	}
-}
-
-// TestLoad_EmptyBody verifies a persona with an empty body fails.
-func TestLoad_EmptyBody(t *testing.T) {
-	root := makeDebateDir(t, map[string]string{
-		"personas/alice.md": "---\nmodel: claude-sonnet-4-6\neffort: high\n---\n",
-	})
-	_, err := config.Load(root, nil, "")
-	if err == nil {
-		t.Fatal("expected error for empty persona body, got nil")
-	}
-}
-
-// TestLoad_UninfernableModel verifies a persona whose model backend cannot be inferred fails.
-func TestLoad_UninfernableModel(t *testing.T) {
-	root := makeDebateDir(t, map[string]string{
-		"personas/alice.md": `---
-model: some-unknown-llm
-effort: high
----
-Alice's system prompt.
-`,
-	})
-	_, err := config.Load(root, nil, "")
-	if err == nil {
-		t.Fatal("expected error for uninferrable model, got nil")
-	}
-	if !strings.Contains(err.Error(), "cannot infer backend") {
-		t.Errorf("error should mention backend inference: %v", err)
-	}
-}
-
-// TestLoad_UnresolvableSelectionName verifies a selector naming a nonexistent persona fails.
-func TestLoad_UnresolvableSelectionName(t *testing.T) {
+func TestLoad_NoTableFilesWithoutWithFails(t *testing.T) {
 	root := makeDebateDir(t, map[string]string{
 		"personas/alice.md": alicePersona,
-		"config.yml":        "table:\n  - alice\n  - carol\n",
+		"tables/readme.md":  "ignored\n",
 	})
-	_, err := config.Load(root, nil, "")
+	_, err := config.Load(root, "", nil, "")
 	if err == nil {
-		t.Fatal("expected error for unresolvable selector, got nil")
+		t.Fatal("expected no table files error, got nil")
 	}
-	if !strings.Contains(err.Error(), "carol") {
-		t.Errorf("error should name the missing persona: %v", err)
+	if !strings.Contains(err.Error(), "no table files") {
+		t.Errorf("error should mention no table files: %v", err)
 	}
 }
 
-// TestLoad_SelectorNamesSynthesizerRole verifies that naming a synthesizer-role persona
-// in a selector is a fail-fast error (distinct from a nonexistent persona).
-func TestLoad_SelectorNamesSynthesizerRole(t *testing.T) {
+func TestLoad_MissingSelectedTableFails(t *testing.T) {
 	root := makeDebateDir(t, map[string]string{
-		"personas/alice.md":       alicePersona,
-		"personas/synthesizer.md": synthPersona,
-		"config.yml":              "table:\n  - alice\n  - synthesizer\n",
+		"personas/alice.md":  alicePersona,
+		"tables/default.yml": "version: 1\npanel:\n  - alice\n",
 	})
-	_, err := config.Load(root, nil, "")
+	_, err := config.Load(root, "missing", nil, "")
 	if err == nil {
-		t.Fatal("expected error when selector names a synthesizer-role persona, got nil")
+		t.Fatal("expected missing table error, got nil")
 	}
-	// Error must mention synthesizer role, not just "not found"
-	if !strings.Contains(strings.ToLower(err.Error()), "synthesizer") {
-		t.Errorf("error should mention synthesizer: %v", err)
+	if !strings.Contains(err.Error(), "missing") {
+		t.Errorf("error should name missing table: %v", err)
 	}
 }
 
-// TestLoad_WithListSynthesizerRole verifies that withList naming a synthesizer-role persona fails.
-func TestLoad_WithListSynthesizerRole(t *testing.T) {
-	root := makeDebateDir(t, map[string]string{
-		"personas/alice.md":       alicePersona,
-		"personas/synthesizer.md": synthPersona,
-	})
-	_, err := config.Load(root, []string{"alice", "synthesizer"}, "")
-	if err == nil {
-		t.Fatal("expected error when withList names a synthesizer-role persona, got nil")
+func TestLoad_TableValidation(t *testing.T) {
+	cases := []struct {
+		name  string
+		table string
+		want  string
+	}{
+		{name: "missing version", table: "panel:\n  - alice\n", want: "version"},
+		{name: "unsupported version", table: "version: 2\npanel:\n  - alice\n", want: "unsupported"},
+		{name: "empty panel", table: "version: 1\npanel: []\n", want: "empty"},
+		{name: "unknown field", table: "version: 1\npanel:\n  - alice\nextra: true\n", want: "field"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := makeDebateDir(t, map[string]string{
+				"personas/alice.md":  alicePersona,
+				"tables/default.yml": tc.table,
+			})
+			_, err := config.Load(root, "", nil, "")
+			if err == nil {
+				t.Fatal("expected table validation error, got nil")
+			}
+			if !strings.Contains(strings.ToLower(err.Error()), tc.want) {
+				t.Errorf("error %q should contain %q", err.Error(), tc.want)
+			}
+		})
 	}
 }
 
-// TestLoad_MissingDebateDir verifies that missing .heurema/debate returns a clear error.
+func TestLoad_InvalidPersonaPathsFail(t *testing.T) {
+	cases := []struct {
+		name string
+		file string
+	}{
+		{name: "invalid root segment", file: "personas/alice.bad.md"},
+		{name: "invalid namespace", file: "personas/bad.ns/alice.md"},
+		{name: "deep markdown", file: "personas/team/deep/alice.md"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := makeDebateDir(t, map[string]string{
+				tc.file:              alicePersona,
+				"tables/default.yml": "version: 1\npanel:\n  - alice\n",
+			})
+			_, err := config.Load(root, "", nil, "")
+			if err == nil {
+				t.Fatal("expected invalid persona path error, got nil")
+			}
+		})
+	}
+}
+
 func TestLoad_MissingDebateDir(t *testing.T) {
 	tmp := t.TempDir()
-	_, err := config.Load(tmp, nil, "")
+	_, err := config.Load(tmp, "", nil, "")
 	if err == nil {
 		t.Fatal("expected error for missing .heurema/debate, got nil")
 	}
 	if !strings.Contains(err.Error(), ".heurema/debate") {
 		t.Errorf("error should mention .heurema/debate: %v", err)
 	}
+}
+
+func personaIDs(panel []persona.Persona) []string {
+	ids := make([]string, len(panel))
+	for i, p := range panel {
+		ids[i] = p.ID
+	}
+	return ids
 }

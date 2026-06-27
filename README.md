@@ -16,8 +16,8 @@ It gives each participant a persona, collects their arguments round by round, an
 
 ## What It Does
 
-- Runs a debate from a positional prompt, `--task @file`, or stdin.
-- Loads debater personas from `.heurema/debate/personas`.
+- Runs a debate from a positional prompt, `--task @file`, `--task -`, or piped stdin.
+- Loads debater personas from `.heurema/debate/personas` and one-level namespaces.
 - Supports proposer/skeptic style review loops and optional synthesis.
 - Can emit human-readable output or JSON for automation.
 - Keeps backend selection in persona files instead of hard-coding one model.
@@ -64,9 +64,39 @@ After `debate init`, the project-local state lives under `.heurema/debate`:
     personas/
       proposer.md
       skeptic.md
+    tables/
+      default.yml
 ```
 
-Each persona file is a Markdown document with front matter. The front matter controls the agent name, role, backend, model, effort, timeout, and other runtime hints. The body describes how that participant should argue.
+Commands that read an existing workspace discover the nearest ancestor containing `.heurema/debate`, starting with the current directory. `debate init` is the exception: it creates the scaffold in the current directory.
+
+Each persona file is a Markdown document with YAML front matter:
+
+```markdown
+---
+version: 1
+role: debater
+model: claude-haiku-4-5
+effort: medium
+# backend: echo
+# tags: [architecture]
+---
+You are the Skeptic. Challenge weak assumptions and identify blocking objections.
+```
+
+Required fields are `version: 1`, `model`, `effort`, and a non-empty body. `role` defaults to `debater` and may be `debater` or `synthesizer`. `backend` overrides model-based backend inference, and `tags` are preserved for future selection features. Unknown fields fail fast.
+
+Tables are explicit and flat under `.heurema/debate/tables`:
+
+```yaml
+version: 1
+panel:
+  - proposer
+  - skeptic
+# synth: final-judge
+```
+
+A run without `--with` uses `--table <name>` or `tables/default.yml`. Tables are flat YAML files, and table panel order is preserved.
 
 ## Personas
 
@@ -74,6 +104,12 @@ Create another debater:
 
 ```sh
 ./debate new architect
+```
+
+Create a namespaced persona:
+
+```sh
+./debate new reviewers/security
 ```
 
 Create a synthesizer persona:
@@ -87,6 +123,13 @@ Then select explicit participants:
 ```sh
 ./debate "Pick the safest migration path" --with proposer --with skeptic --synth final-judge
 ```
+
+Selectors are deterministic. `namespace/name` is an exact persona ID. A short selector such as `skeptic` first resolves an exact root persona ID when present; otherwise it works only when exactly one loaded persona has that short name. Ambiguous short names fail and list the qualified IDs.
+
+Selection precedence is:
+
+- panel: `--with` in the provided order, otherwise the selected table panel
+- synthesizer: `--synth`, then selected table `synth`, then a uniquely resolved `synthesizer` persona, then the built-in default
 
 For deterministic local smoke tests, point a persona at the echo backend:
 
@@ -104,20 +147,21 @@ debate "<task>" [flags]
 debate --task @path/to/task.md [flags]
 debate --task - [flags]
 debate init
-debate new [--role debater|synthesizer] <name>
+debate new [--role debater|synthesizer] <name|namespace/name>
 debate version
 ```
 
 Run flags:
 
 ```text
+--table <name>        Select a flat table from .heurema/debate/tables.
 --with <persona>      Add a debater persona. Repeat for multiple participants.
 --synth <persona>     Use a synthesizer persona for the final answer.
 --task <value>        Read task from inline text, @file, or - for stdin.
 --max-rounds <n>      Limit debate rounds. Defaults to 10.
 --json                Emit JSON.
 -q, --quiet           Reduce human-readable output.
---sealed              Hide debater output from other debaters where supported.
+--sealed              Thread read-only intent into backend transports where supported.
 ```
 
 ## Development

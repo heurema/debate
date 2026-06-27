@@ -24,6 +24,7 @@ func writePersona(t *testing.T, dir, name, content string) string {
 func TestParseFile_ValidDebater(t *testing.T) {
 	dir := t.TempDir()
 	path := writePersona(t, dir, "alice.md", `---
+version: 1
 model: claude-sonnet-4-6
 effort: high
 tags:
@@ -62,6 +63,7 @@ You are Alice, a careful logical reasoner.
 func TestParseFile_ValidSynthesizer(t *testing.T) {
 	dir := t.TempDir()
 	path := writePersona(t, dir, "synthesizer.md", `---
+version: 1
 role: synthesizer
 model: claude-haiku-4-5
 effort: low
@@ -86,6 +88,7 @@ You are the synthesizer. Summarize agreement and disagreement.
 func TestParseFile_ExplicitBackendOverridesInference(t *testing.T) {
 	dir := t.TempDir()
 	path := writePersona(t, dir, "bob.md", `---
+version: 1
 model: claude-opus-4-8
 effort: medium
 backend: some-custom-backend
@@ -104,6 +107,7 @@ Bob's system prompt.
 func TestParseFile_RoleDefaultsToDebater(t *testing.T) {
 	dir := t.TempDir()
 	path := writePersona(t, dir, "carol.md", `---
+version: 1
 model: gpt-4o
 effort: medium
 ---
@@ -124,6 +128,7 @@ Carol's system prompt.
 func TestParseFile_GeminiBackend(t *testing.T) {
 	dir := t.TempDir()
 	path := writePersona(t, dir, "dave.md", `---
+version: 1
 model: gemini-pro
 effort: medium
 ---
@@ -141,6 +146,7 @@ Dave's system prompt.
 func TestParseFile_UnknownFrontmatterKey(t *testing.T) {
 	dir := t.TempDir()
 	path := writePersona(t, dir, "bad.md", `---
+version: 1
 model: claude-sonnet-4-6
 effort: high
 unknown_key: should_fail
@@ -153,9 +159,45 @@ Body text.
 	}
 }
 
+func TestParseFile_MissingVersion(t *testing.T) {
+	dir := t.TempDir()
+	path := writePersona(t, dir, "bad.md", `---
+model: claude-sonnet-4-6
+effort: high
+---
+Body text.
+`)
+	_, err := persona.ParseFile(path)
+	if err == nil {
+		t.Fatal("expected error for missing version, got nil")
+	}
+	if !strings.Contains(err.Error(), "bad") || !strings.Contains(err.Error(), "version") {
+		t.Errorf("error should name persona and version: %v", err)
+	}
+}
+
+func TestParseFile_UnsupportedVersion(t *testing.T) {
+	dir := t.TempDir()
+	path := writePersona(t, dir, "bad.md", `---
+version: 2
+model: claude-sonnet-4-6
+effort: high
+---
+Body text.
+`)
+	_, err := persona.ParseFile(path)
+	if err == nil {
+		t.Fatal("expected error for unsupported version, got nil")
+	}
+	if !strings.Contains(err.Error(), "unsupported version") {
+		t.Errorf("error should mention unsupported version: %v", err)
+	}
+}
+
 func TestParseFile_InvalidRole(t *testing.T) {
 	dir := t.TempDir()
 	path := writePersona(t, dir, "bad.md", `---
+version: 1
 role: moderator
 model: claude-sonnet-4-6
 effort: high
@@ -174,6 +216,7 @@ Body text.
 func TestParseFile_MissingModel(t *testing.T) {
 	dir := t.TempDir()
 	path := writePersona(t, dir, "bad.md", `---
+version: 1
 effort: high
 ---
 Body text.
@@ -190,6 +233,7 @@ Body text.
 func TestParseFile_MissingEffort(t *testing.T) {
 	dir := t.TempDir()
 	path := writePersona(t, dir, "bad.md", `---
+version: 1
 model: claude-sonnet-4-6
 ---
 Body text.
@@ -206,6 +250,7 @@ Body text.
 func TestParseFile_EmptyBody(t *testing.T) {
 	dir := t.TempDir()
 	path := writePersona(t, dir, "bad.md", `---
+version: 1
 model: claude-sonnet-4-6
 effort: high
 ---
@@ -221,7 +266,7 @@ effort: high
 
 func TestParseFile_WhitespaceOnlyBody(t *testing.T) {
 	dir := t.TempDir()
-	path := writePersona(t, dir, "bad.md", "---\nmodel: claude-sonnet-4-6\neffort: high\n---\n   \n\t\n")
+	path := writePersona(t, dir, "bad.md", "---\nversion: 1\nmodel: claude-sonnet-4-6\neffort: high\n---\n   \n\t\n")
 	_, err := persona.ParseFile(path)
 	if err == nil {
 		t.Fatal("expected error for whitespace-only body, got nil")
@@ -231,6 +276,7 @@ func TestParseFile_WhitespaceOnlyBody(t *testing.T) {
 func TestParseFile_UninfernableModel(t *testing.T) {
 	dir := t.TempDir()
 	path := writePersona(t, dir, "bad.md", `---
+version: 1
 model: some-unknown-llm
 effort: high
 ---
@@ -290,6 +336,6 @@ func TestParseFile_NoFrontmatterFails(t *testing.T) {
 	path := writePersona(t, dir, "nofm.md", "Just a body with no frontmatter at all.\n")
 	_, err := persona.ParseFile(path)
 	if err == nil {
-		t.Fatal("expected error (missing model), got nil")
+		t.Fatal("expected error (missing version), got nil")
 	}
 }

@@ -20,7 +20,7 @@ func TestCmdInit_CreatesWorkspaceThatLoads(t *testing.T) {
 		t.Fatalf("cmdInit exit %d: stderr=%q", code, errout.String())
 	}
 
-	ws, err := config.Load(workDir, nil, "")
+	ws, err := config.Load(workDir, "", nil, "")
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
 	}
@@ -38,6 +38,17 @@ func TestCmdInit_CreatesWorkspaceThatLoads(t *testing.T) {
 	contextPath := filepath.Join(workDir, ".heurema", "debate", "context.md")
 	if _, err := os.Stat(contextPath); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("context.md should not be created by init; stat err: %v", err)
+	}
+
+	tablePath := filepath.Join(workDir, ".heurema", "debate", "tables", "default.yml")
+	table, err := os.ReadFile(tablePath)
+	if err != nil {
+		t.Fatalf("default table missing: %v", err)
+	}
+	if !strings.Contains(string(table), "version: 1") ||
+		!strings.Contains(string(table), "proposer") ||
+		!strings.Contains(string(table), "skeptic") {
+		t.Errorf("default table content is not v1 panel: %q", string(table))
 	}
 }
 
@@ -153,6 +164,31 @@ func TestCmdNew_SynthesizerRole(t *testing.T) {
 	}
 }
 
+func TestCmdNew_CreatesNamespacedPersona(t *testing.T) {
+	workDir := t.TempDir()
+	if code := cmdInit(nil, &bytes.Buffer{}, &bytes.Buffer{}, workDir); code != 0 {
+		t.Fatal("cmdInit failed")
+	}
+
+	var out, errout bytes.Buffer
+	code := cmdNew([]string{"team/analyst"}, &out, &errout, workDir)
+	if code != 0 {
+		t.Fatalf("cmdNew exit %d: stderr=%q", code, errout.String())
+	}
+
+	personaPath := filepath.Join(workDir, ".heurema", "debate", "personas", "team", "analyst.md")
+	p, err := persona.ParseFileWithID(personaPath, "team/analyst")
+	if err != nil {
+		t.Fatalf("persona.ParseFileWithID: %v", err)
+	}
+	if p.ID != "team/analyst" {
+		t.Errorf("ID = %q, want team/analyst", p.ID)
+	}
+	if !strings.Contains(out.String(), personaPath) {
+		t.Errorf("expected output to mention created path, got: %q", out.String())
+	}
+}
+
 func TestCmdNew_RoleFlagBeforeAndAfterName(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -208,7 +244,7 @@ func TestCmdNew_RefusesOverwrite(t *testing.T) {
 
 func TestCmdNew_RejectsPathSeparators(t *testing.T) {
 	workDir := t.TempDir()
-	cases := []string{"foo/bar", `foo\bar`, "../evil", "foo.bar"}
+	cases := []string{`foo\bar`, "../evil", "foo.bar", "/absolute", "too/deep/name", "foo/", "/foo", "foo//bar"}
 	for _, name := range cases {
 		var errout bytes.Buffer
 		code := cmdNew([]string{name}, &bytes.Buffer{}, &errout, workDir)

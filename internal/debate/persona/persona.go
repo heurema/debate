@@ -24,6 +24,7 @@ type Persona struct {
 }
 
 type frontmatterFields struct {
+	Version int      `yaml:"version"`
 	Role    string   `yaml:"role"`
 	Model   string   `yaml:"model"`
 	Effort  string   `yaml:"effort"`
@@ -34,11 +35,16 @@ type frontmatterFields struct {
 // ParseFile reads and parses a persona from path.
 // The basename without .md becomes the persona ID.
 func ParseFile(path string) (Persona, error) {
+	id := strings.TrimSuffix(filepath.Base(path), ".md")
+	return ParseFileWithID(path, id)
+}
+
+// ParseFileWithID reads and parses a persona from path using id as the persona ID.
+func ParseFileWithID(path, id string) (Persona, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return Persona{}, fmt.Errorf("persona %s: %w", filepath.Base(path), err)
+		return Persona{}, fmt.Errorf("persona %s: %w", id, err)
 	}
-	id := strings.TrimSuffix(filepath.Base(path), ".md")
 	return parse(id, data)
 }
 
@@ -55,6 +61,13 @@ func parse(id string, content []byte) (Persona, error) {
 		if err := dec.Decode(&fields); err != nil {
 			return Persona{}, fmt.Errorf("persona %s: %w", id, err)
 		}
+	}
+
+	if fields.Version == 0 {
+		return Persona{}, fmt.Errorf("persona %s: missing required field: version", id)
+	}
+	if fields.Version != 1 {
+		return Persona{}, fmt.Errorf("persona %s: unsupported version %d (must be 1)", id, fields.Version)
 	}
 
 	role := fields.Role

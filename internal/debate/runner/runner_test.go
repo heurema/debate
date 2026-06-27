@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -59,14 +60,37 @@ func makeWorkspace(t *testing.T, personas map[string]string) string {
 	}
 	for name, content := range personas {
 		path := filepath.Join(personasDir, name+".md")
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
+	}
+	var names []string
+	for name := range personas {
+		if name != "synthesizer" {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	var table strings.Builder
+	table.WriteString("version: 1\npanel:\n")
+	for _, name := range names {
+		fmt.Fprintf(&table, "  - %s\n", name)
+	}
+	tablesDir := filepath.Join(debDir, "tables")
+	if err := os.MkdirAll(tablesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tablesDir, "default.yml"), []byte(table.String()), 0o644); err != nil {
+		t.Fatal(err)
 	}
 	return root
 }
 
 const echoPersonaContent = `---
+version: 1
 model: echo-local
 effort: low
 backend: echo
@@ -251,6 +275,43 @@ func TestRun_SynthesizerCalledOnceWithFinalTranscript(t *testing.T) {
 		if !strings.Contains(prompts[0], want) {
 			t.Fatalf("synthesizer prompt missing %q\nprompt:\n%s", want, prompts[0])
 		}
+	}
+}
+
+func TestRun_UsesFullPersonaIDsForNamespacedParticipants(t *testing.T) {
+	workDir := makeWorkspace(t, map[string]string{
+		"team/alice": echoPersonaContent,
+	})
+
+	aliceSess := mock.NewSession([]mock.ScriptedResult{
+		{Result: transport.Result{Content: "namespaced turn"}},
+	})
+	synthSess := mock.NewSession([]mock.ScriptedResult{
+		{Result: transport.Result{Content: "synthesis"}},
+	})
+	tr := newCountingTransport(map[string]*mock.Session{
+		"team/alice":  aliceSess,
+		"synthesizer": synthSess,
+	})
+
+	result, err := runner.Run(context.Background(), runner.Config{
+		WorkDir:   workDir,
+		Task:      "keep IDs qualified",
+		MaxRounds: 1,
+		Resolver:  func(_ string) (transport.Transport, error) { return tr, nil },
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if tr.opens["team/alice"] != 1 {
+		t.Fatalf("team/alice opens = %d, want 1", tr.opens["team/alice"])
+	}
+	if len(result.Turns) != 1 || result.Turns[0].Speaker != "team/alice" {
+		t.Fatalf("turn speakers = %+v, want team/alice", result.Turns)
+	}
+	prompts := synthSess.Prompts()
+	if len(prompts) != 1 || !strings.Contains(prompts[0], "[Round 1 — team/alice]") {
+		t.Fatalf("synthesizer prompt missing full persona ID: %v", prompts)
 	}
 }
 

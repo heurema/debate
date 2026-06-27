@@ -109,7 +109,7 @@ The engine does not know about:
 
 - persona files
 - `.heurema/debate`
-- `config.yml`
+- workspace tables
 - backend inference
 - synthesizer selection
 - signal JSON shape
@@ -134,10 +134,9 @@ Persona model names infer default backends unless `backend` is set explicitly:
 
 | Model pattern | Default backend |
 |---|---|
-| `claude-*`, `opus`, `sonnet` | `claude-agent-acp` |
+| `claude-*`, `opus`, `sonnet`, `haiku`, `fable` | `claude-agent-acp` |
 | `gpt-*`, `codex`, `o*` | `codex-acp` |
 | `gemini-*` | `agy` |
-| `echo-*` | `echo` |
 
 ACP backends are session-oriented: one long-lived session per participant for the run. Exec backends are stateless: each turn spawns a command and renders the full prompt context.
 
@@ -175,33 +174,55 @@ The CLI currently exposes `--max-rounds`; settle and patience remain code defaul
 
 ## 6. Workspace
 
-The project-local workspace is discovered by walking upward from the current directory, like Git discovery:
+The project-local workspace is discovered by walking upward from the current directory, like Git discovery. The marker is `.heurema/debate`; commands do not fall back to the repository root, home directory, or an implicit current-directory layout when that marker is absent.
 
 ```text
 .heurema/debate/
-├── config.yml          # optional
-└── personas/
-    ├── proposer.md
-    ├── skeptic.md
-    └── synthesizer.md  # optional
+├── personas/
+│   ├── proposer.md
+│   ├── skeptic.md
+│   └── reviewers/
+│       └── security.md
+└── tables/
+    └── default.yml
 ```
 
-`debate init` creates `.heurema/debate/personas/proposer.md` and `skeptic.md`. It does not create `config.yml`; by default, all `role: debater` personas are used in lexicographic order.
+`debate init` creates `.heurema/debate/personas/proposer.md`, `.heurema/debate/personas/skeptic.md`, and `.heurema/debate/tables/default.yml`. It writes into the current directory and does not overwrite existing files.
 
-Optional `config.yml` can pin the default panel:
+Persona discovery loads Markdown files from exactly these shapes:
+
+```text
+personas/<name>.md
+personas/<namespace>/<name>.md
+```
+
+Persona IDs are `name` or `namespace/name`. Segments may contain only letters, digits, hyphens, and underscores. Hidden files and non-Markdown files in persona directories are ignored. Deeper Markdown files fail fast.
+
+Table discovery loads flat YAML files from:
+
+```text
+tables/<table>.yml
+```
+
+Table names use the same path-safe segment rule and do not contain slashes. Hidden files and non-`.yml` files in the tables directory are ignored.
+
+A table pins a panel:
 
 ```yaml
-table:
+version: 1
+panel:
   - proposer
   - skeptic
+# synth: synthesizer
 ```
 
-`--with` overrides `config.yml` for one run.
+Table files require `version: 1` and a non-empty `panel`. The optional `synth` field uses the same selector resolver as `--synth`. Unknown fields fail fast.
 
 Persona files are Markdown with YAML front matter:
 
 ```markdown
 ---
+version: 1
 role: debater
 model: claude-haiku-4-5
 effort: medium
@@ -213,6 +234,7 @@ You are the Skeptic. Challenge weak assumptions and identify blocking objections
 
 Required fields:
 
+- `version: 1`
 - `model`
 - `effort`
 - non-empty body
@@ -225,6 +247,15 @@ Optional fields:
 
 Unknown front matter keys fail fast.
 
+Participant selectors are deterministic:
+
+- selectors containing `/` are exact full persona IDs
+- selectors without `/` first resolve an exact root persona ID when present
+- selectors without `/` otherwise resolve by short name only when exactly one candidate exists
+- zero matches and ambiguous short names fail with actionable errors
+
+Panel resolution uses `--with` in the provided order when present. Otherwise it uses `--table <name>` or `tables/default.yml`. Naming a synthesizer-role persona or the same resolved persona more than once in a panel fails before any backend session opens.
+
 ## 7. Synthesizer
 
 The synthesizer produces the final answer from the transcript. It does not participate in the debate panel.
@@ -232,10 +263,11 @@ The synthesizer produces the final answer from the transcript. It does not parti
 Resolution order:
 
 1. `--synth <persona>`
-2. persona named `synthesizer`
-3. built-in default synthesizer
+2. selected table `synth`
+3. uniquely resolved selector `synthesizer`
+4. built-in default synthesizer
 
-The built-in default uses `claude-haiku-4-5` with low effort and a neutral synthesis prompt. A custom `synthesizer.md` is only needed when the project wants a different model, backend, or synthesis style.
+The built-in default uses `claude-haiku-4-5` with low effort and a neutral synthesis prompt. A custom synthesizer persona is only needed when the project wants a different model, backend, or synthesis style. Synthesizer resolution rejects debater-role personas.
 
 ## 8. Task Input
 
@@ -244,8 +276,8 @@ The task is assembled from:
 - positional arguments
 - `--task <text>`
 - `--task @path/to/file`
-- `--task -`
-- piped stdin
+- `--task -`, which reads stdin and does not add a literal `-`
+- piped stdin when `--task -` has not already consumed stdin
 
 Sources compose. For example, a user can pipe a diff and add an instruction:
 
@@ -274,20 +306,21 @@ debate "<task>" [flags]
 debate --task @path/to/task.md [flags]
 debate --task - [flags]
 debate init
-debate new [--role debater|synthesizer] <name>
+debate new [--role debater|synthesizer] <name|namespace/name>
 debate version
 ```
 
 Run flags:
 
 ```text
+--table <name>        Select a flat table from .heurema/debate/tables.
 --with <persona>      Add a debater persona. Repeat for multiple participants.
 --synth <persona>     Use a synthesizer persona for the final answer.
 --task <value>        Read task from inline text, @file, or - for stdin.
 --max-rounds <n>      Limit debate rounds. Defaults to 10.
 --json                Emit JSON.
 -q, --quiet           Reduce human-readable output.
---sealed              Hide project/web access where supported.
+--sealed              Thread read-only intent into backend transports where supported.
 ```
 
 IO contract:

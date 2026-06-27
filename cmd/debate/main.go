@@ -68,9 +68,10 @@ type cliDeps struct {
 }
 
 type runCmd struct {
+	Table         string   `name:"table" help:"Table name to run (defaults to default)."`
 	With          []string `name:"with" help:"Persona id to include in panel. Repeatable."`
 	SynthOverride string   `name:"synth" help:"Override synthesizer persona id."`
-	TaskFlag      string   `name:"task" help:"Task text or @file (reads file content when prefixed with @)."`
+	TaskFlag      string   `name:"task" help:"Task text, @file, or - for stdin."`
 	MaxRounds     int      `name:"max-rounds" default:"10" help:"Maximum debate rounds."`
 	JSONOut       bool     `name:"json" help:"Write JSON result to stdout, suppress stderr trace."`
 	Quiet         bool     `name:"quiet" short:"q" help:"Suppress stderr debate trace."`
@@ -243,6 +244,7 @@ func runDebate(
 
 	cfg := runner.Config{
 		WorkDir:       workDir,
+		TableName:     cmd.Table,
 		WithList:      cmd.With,
 		SynthOverride: cmd.SynthOverride,
 		Task:          task,
@@ -322,16 +324,27 @@ func exitCode(reason string) int {
 // Non-empty parts are joined with a newline.
 func assembleTask(taskFlag string, positional []string, stdin io.Reader) (string, error) {
 	var parts []string
+	stdinConsumed := false
 
 	if taskFlag != "" {
-		if strings.HasPrefix(taskFlag, "@") {
+		switch {
+		case taskFlag == "-":
+			stdinText, err := readIfPiped(stdin)
+			if err != nil {
+				return "", fmt.Errorf("stdin: %w", err)
+			}
+			stdinConsumed = true
+			if stdinText != "" {
+				parts = append(parts, stdinText)
+			}
+		case strings.HasPrefix(taskFlag, "@"):
 			path := taskFlag[1:]
 			data, err := os.ReadFile(path)
 			if err != nil {
 				return "", fmt.Errorf("--task @%s: %w", path, err)
 			}
 			parts = append(parts, strings.TrimRight(string(data), "\n"))
-		} else {
+		default:
 			parts = append(parts, taskFlag)
 		}
 	}
@@ -340,10 +353,12 @@ func assembleTask(taskFlag string, positional []string, stdin io.Reader) (string
 		parts = append(parts, strings.Join(positional, " "))
 	}
 
-	if stdinText, err := readIfPiped(stdin); err != nil {
-		return "", fmt.Errorf("stdin: %w", err)
-	} else if stdinText != "" {
-		parts = append(parts, stdinText)
+	if !stdinConsumed {
+		if stdinText, err := readIfPiped(stdin); err != nil {
+			return "", fmt.Errorf("stdin: %w", err)
+		} else if stdinText != "" {
+			parts = append(parts, stdinText)
+		}
 	}
 
 	return strings.Join(parts, "\n"), nil

@@ -41,11 +41,19 @@ func makeE2EWorkspace(t *testing.T) string {
 	}
 	for _, name := range []string{"alice", "bob"} {
 		path := filepath.Join(personasDir, name+".md")
-		content := "---\nmodel: echo-local\neffort: low\nbackend: echo\n---\n" +
+		content := "---\nversion: 1\nmodel: echo-local\neffort: low\nbackend: echo\n---\n" +
 			"You are a debate participant. State your position clearly.\n"
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
+	}
+	tablesDir := filepath.Join(debDir, "tables")
+	if err := os.MkdirAll(tablesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	table := "version: 1\npanel:\n  - alice\n  - bob\n"
+	if err := os.WriteFile(filepath.Join(tablesDir, "default.yml"), []byte(table), 0o644); err != nil {
+		t.Fatal(err)
 	}
 	return root
 }
@@ -59,10 +67,18 @@ func makeUnimplementedWorkspace(t *testing.T) string {
 	if err := os.MkdirAll(personasDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// backend: api is not yet implemented and unknown to defaultResolver.
+	// backend: api is not implemented and is unknown to defaultResolver.
 	path := filepath.Join(personasDir, "agent.md")
-	content := "---\nmodel: api-model-1\neffort: low\nbackend: api\n---\nYou are a debate participant.\n"
+	content := "---\nversion: 1\nmodel: api-model-1\neffort: low\nbackend: api\n---\nYou are a debate participant.\n"
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tablesDir := filepath.Join(debDir, "tables")
+	if err := os.MkdirAll(tablesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	table := "version: 1\npanel:\n  - agent\n"
+	if err := os.WriteFile(filepath.Join(tablesDir, "default.yml"), []byte(table), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return root
@@ -192,6 +208,37 @@ func TestE2E_RunWordIsTaskNotCommand(t *testing.T) {
 	}
 }
 
+func TestE2E_TableFlagSelectsPanel(t *testing.T) {
+	workDir := makeE2EWorkspace(t)
+	tablePath := filepath.Join(workDir, ".heurema", "debate", "tables", "solo.yml")
+	if err := os.WriteFile(tablePath, []byte("version: 1\npanel:\n  - bob\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	const content = "I agree.\n\n```signal\n{\"position\": \"agree\", \"objections\": [], \"done\": true}\n```"
+	bob := mock.NewSession(notDoneScripts(5, content))
+	synth := mock.NewSession([]mock.ScriptedResult{{Result: transport.Result{Content: "synthesis"}}})
+	resolver := func(_ string) (transport.Transport, error) {
+		return mock.NewTransport(map[string]*mock.Session{
+			"bob":         bob,
+			"synthesizer": synth,
+		}), nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := parseAndRun(
+		[]string{"--table", "solo", "use solo table"},
+		&stdout, &stderr, strings.NewReader(""),
+		false, noEnv, resolver, workDir,
+	)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if len(bob.Prompts()) == 0 {
+		t.Fatal("bob was not run")
+	}
+}
+
 func TestCLI_UnknownFlagReportsUsage(t *testing.T) {
 	workDir := makeE2EWorkspace(t)
 	var stdout, stderr bytes.Buffer
@@ -261,7 +308,6 @@ func TestE2E_UnimplementedBackend_Exit1(t *testing.T) {
 	workDir := makeUnimplementedWorkspace(t)
 	var stdout, stderr bytes.Buffer
 
-	// defaultResolver returns error for unknown backend "agy".
 	code := parseAndRun(
 		[]string{"any task"},
 		&stdout, &stderr, strings.NewReader(""),
