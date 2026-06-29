@@ -325,18 +325,83 @@ Run flags:
 --synth <persona>     Use a synthesizer persona for the final answer.
 --task <value>        Read task from inline text, @file, or - for stdin.
 --max-rounds <n>      Limit debate rounds. Defaults to 10.
---json                Emit JSON.
--q, --quiet           Reduce human-readable output.
+--json                Emit JSON final result on stdout.
+-q, --quiet           Suppress stderr progress events.
 --sealed              Thread read-only intent into backend transports where supported.
 ```
 
 IO contract:
 
-- stdout: final answer, or structured JSON with `--json`
-- stderr: live debate trace when enabled
+- stdout: final-result-only; human mode writes only the final answer, and `--json` writes only the existing result JSON object
+- stderr: default-on agent-readable progress events for debate runs, plus unprefixed CLI errors and unavoidable backend/process noise
 - exit `0`: settled
 - exit `2`: not converged
 - exit `1`: error
+
+Progress events are a v1 line protocol on stderr. Every machine-readable line begins exactly with `@@DEBATE_PROGRESS ` followed by one JSON object. Only prefixed lines are part of the progress contract; consumers should ignore unprefixed stderr. `--json` affects only stdout result formatting and does not suppress, redirect, or alter progress. `--quiet` suppresses all progress event lines while preserving final-result stdout and normal CLI error reporting.
+
+Every progress object has:
+
+- `version: 1`
+- `type`
+- `stage`
+- `elapsed_ms`
+
+V1 `type` values are:
+
+```text
+run_started
+workspace_loaded
+session_opening
+session_opened
+round_started
+turn_started
+heartbeat
+turn_completed
+round_completed
+synthesis_started
+synthesis_completed
+run_completed
+run_failed
+```
+
+Stage mapping is:
+
+| Event type | Stage |
+|---|---|
+| `run_started`, `workspace_loaded` | `loading_workspace` |
+| `session_opening`, `session_opened` | `opening_session` |
+| `round_started`, `round_completed` | `running_round` |
+| `turn_started`, `turn_completed` | `running_turn` |
+| participant-send `heartbeat` | `running_turn` |
+| synthesizer-send `heartbeat` | `synthesizing` |
+| `synthesis_started`, `synthesis_completed` | `synthesizing` |
+| `run_completed` | `completed` |
+| `run_failed` | active lifecycle stage when known, otherwise `failed` |
+
+Event-specific required fields are:
+
+| Event type | Required fields |
+|---|---|
+| `session_opening` | `speaker` |
+| `session_opened` | `speaker`, `duration_ms` |
+| `round_started` | `round` |
+| `turn_started` | `round`, `speaker` |
+| participant-send `heartbeat` | `round`, `speaker`, `silence_ms` |
+| synthesizer-send `heartbeat` | `silence_ms` |
+| `turn_completed` | `round`, `speaker`, `duration_ms` |
+| `round_completed` | `round`, `duration_ms` |
+| `synthesis_completed` | `duration_ms` |
+| `run_completed` | `duration_ms` |
+| `run_failed` | `error` |
+
+`round` is 1-based. `speaker` is the resolved participant identity used by the runner/orchestrate participant list and session routing. `elapsed_ms`, `duration_ms`, and `silence_ms` are non-negative integer milliseconds when present. `run_failed.error` includes the underlying error text and does not replace the existing CLI error line.
+
+Lifecycle event cardinality is deterministic for non-failing runs: exactly one `run_started`, one `workspace_loaded`, matching `session_opening` and `session_opened` for each participant session, matching `round_started` and `round_completed` for each completed round, matching `turn_started` and `turn_completed` for each participant turn, one `synthesis_started`, one `synthesis_completed`, and final `run_completed`. `turn_started` is emitted before the participant `Session.Send` call, and `turn_completed` is emitted after the turn is appended. On failure, at most one `run_failed` is emitted; when present, it is the final progress event and `run_completed` is not emitted.
+
+Heartbeat cadence is fixed at 1000 milliseconds in v1. A blocking send window begins immediately before a participant `Session.Send` or synthesizer `Send` call and ends immediately after it returns. No heartbeat is required for sends that return before 1000 milliseconds. If the send is still blocked, heartbeats continue once per additional 1000 milliseconds. `silence_ms` is measured from the start of the current send window, is monotonically non-decreasing within that window, and resets for the next send. Participant heartbeats include the active `round` and `speaker`; synthesizer heartbeats use stage `synthesizing` and do not include invented round or speaker values.
+
+Progress writes are serialized through one emitter so heartbeat and lifecycle goroutines cannot interleave prefixed JSON lines.
 
 The CLI validates workspace shape and persona config before the first model call where possible.
 

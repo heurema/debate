@@ -92,7 +92,7 @@ func TestE2E_ConfigErrorsDoNotResolveBackends(t *testing.T) {
 			code := parseAndRun(
 				tc.args,
 				&stdout, &stderr, strings.NewReader(""),
-				false, noEnv, resolver, workDir,
+				resolver, workDir,
 			)
 
 			if code != 1 {
@@ -137,7 +137,7 @@ func TestCLI_WithEmptySelectorsFailBeforeResolver(t *testing.T) {
 			code := parseAndRun(
 				tc.args,
 				&stdout, &stderr, strings.NewReader(""),
-				false, noEnv, resolver, workDir,
+				resolver, workDir,
 			)
 
 			if code != 1 {

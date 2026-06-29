@@ -206,7 +206,7 @@ func TestCmdNew_RoleFlagBeforeAndAfterName(t *testing.T) {
 
 			args := append([]string{"new"}, tc.args...)
 			var errout bytes.Buffer
-			code := parseCLI(args, &bytes.Buffer{}, &errout, strings.NewReader(""), false, noEnv, echoAll, workDir)
+			code := parseCLI(args, &bytes.Buffer{}, &errout, strings.NewReader(""), echoAll, workDir)
 			if code != 0 {
 				t.Fatalf("cmdNew exit %d: stderr=%q", code, errout.String())
 			}

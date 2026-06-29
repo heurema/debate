@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/heurema/debate/internal/debate/config"
 	"github.com/heurema/debate/internal/debate/prompt"
@@ -18,6 +19,20 @@ import (
 // Return an error for unimplemented or unknown backends.
 type Resolver func(backend string) (transport.Transport, error)
 
+// Progress receives run lifecycle and engine progress events.
+type Progress interface {
+	orchestrate.Progress
+	RunStarted()
+	WorkspaceLoaded()
+	SessionOpening(speaker string)
+	SessionOpened(speaker string, duration time.Duration)
+	SynthesisStarted()
+	SynthesisHeartbeat(silence time.Duration)
+	SynthesisCompleted(duration time.Duration)
+	RunCompleted(duration time.Duration)
+	RunFailed(err error)
+}
+
 // Config is the full input to Run.
 type Config struct {
 	WorkDir       string                 // start dir for .heurema/debate discovery
@@ -29,6 +44,10 @@ type Config struct {
 	Sealed        bool                   // sets ReadOnly on all transport.Spec values
 	OnTurn        func(orchestrate.Turn) // optional live callback per turn
 	Resolver      Resolver
+	Progress      Progress
+
+	// HeartbeatInterval defaults to 1s. Tests may set a shorter interval.
+	HeartbeatInterval time.Duration
 }
 
 // Result is the output of a successful Run.
@@ -47,7 +66,7 @@ const (
 // Run validates inputs fail-fast, loads the workspace, runs the debate loop,
 // then invokes the synthesizer once to produce the final answer.
 // Sessions are opened after validation; all opened sessions are closed before return.
-func Run(ctx context.Context, cfg Config) (Result, error) {
+func Run(ctx context.Context, cfg Config) (result Result, err error) {
 	if strings.TrimSpace(cfg.Task) == "" {
 		return Result{}, fmt.Errorf("task is empty")
 	}
@@ -57,9 +76,22 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		maxRounds = 10
 	}
 
+	runStart := time.Now()
+	if cfg.Progress != nil {
+		cfg.Progress.RunStarted()
+		defer func() {
+			if err != nil {
+				cfg.Progress.RunFailed(err)
+			}
+		}()
+	}
+
 	ws, err := config.Load(cfg.WorkDir, cfg.TableName, cfg.WithList, cfg.SynthOverride)
 	if err != nil {
 		return Result{}, err
+	}
+	if cfg.Progress != nil {
+		cfg.Progress.WorkspaceLoaded()
 	}
 	if len(ws.Panel) == 0 {
 		return Result{}, fmt.Errorf("panel is empty")
@@ -88,9 +120,17 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 			System:   p.System,
 			ReadOnly: cfg.Sealed,
 		}
+		var openStart time.Time
+		if cfg.Progress != nil {
+			cfg.Progress.SessionOpening(p.ID)
+			openStart = time.Now()
+		}
 		sess, err := tr.Open(ctx, spec)
 		if err != nil {
 			return Result{}, fmt.Errorf("open session for %q: %w", p.ID, err)
+		}
+		if cfg.Progress != nil {
+			cfg.Progress.SessionOpened(p.ID, time.Since(openStart))
 		}
 		sessions = append(sessions, sess)
 		participants = append(participants, orchestrate.Participant{ID: p.ID, Session: sess})
@@ -106,7 +146,9 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 			Settle:   settleDefault,
 			Patience: patienceDefault,
 		},
-		OnTurn: cfg.OnTurn,
+		OnTurn:            cfg.OnTurn,
+		Progress:          cfg.Progress,
+		HeartbeatInterval: cfg.HeartbeatInterval,
 	}
 
 	res, err := orchestrate.Run(ctx, orcCfg)
@@ -117,6 +159,10 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	answer, err := synthesize(ctx, cfg, ws, res.Transcript)
 	if err != nil {
 		return Result{}, fmt.Errorf("synthesize: %w", err)
+	}
+
+	if cfg.Progress != nil {
+		cfg.Progress.RunCompleted(time.Since(runStart))
 	}
 
 	return Result{
@@ -145,9 +191,20 @@ func synthesize(ctx context.Context, cfg Config, ws config.Workspace, tr *orches
 	}
 	defer sess.Close()
 
-	result, err := sess.Send(ctx, buildSynthPrompt(cfg.Task, tr))
+	if cfg.Progress != nil {
+		cfg.Progress.SynthesisStarted()
+	}
+	sendStart := time.Now()
+	result, err := orchestrate.SendWithHeartbeat(ctx, sess, buildSynthPrompt(cfg.Task, tr), cfg.HeartbeatInterval, func(silence time.Duration) {
+		if cfg.Progress != nil {
+			cfg.Progress.SynthesisHeartbeat(silence)
+		}
+	})
 	if err != nil {
 		return "", fmt.Errorf("synthesizer send: %w", err)
+	}
+	if cfg.Progress != nil {
+		cfg.Progress.SynthesisCompleted(time.Since(sendStart))
 	}
 	return result.Content, nil
 }

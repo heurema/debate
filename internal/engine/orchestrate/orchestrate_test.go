@@ -4,13 +4,68 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/heurema/debate/internal/engine/loop"
 	"github.com/heurema/debate/internal/engine/orchestrate"
 	"github.com/heurema/debate/internal/engine/transport"
 	"github.com/heurema/debate/internal/engine/transport/mock"
 )
+
+type progressEvent struct {
+	typ        string
+	round      int
+	speaker    string
+	durationMS int64
+	silenceMS  int64
+}
+
+type recordingProgress struct {
+	mu     sync.Mutex
+	events []progressEvent
+	ch     chan progressEvent
+}
+
+func newRecordingProgress() *recordingProgress {
+	return &recordingProgress{ch: make(chan progressEvent, 20)}
+}
+
+func (p *recordingProgress) add(ev progressEvent) {
+	p.mu.Lock()
+	p.events = append(p.events, ev)
+	p.mu.Unlock()
+	p.ch <- ev
+}
+
+func (p *recordingProgress) RoundStarted(round int) {
+	p.add(progressEvent{typ: "round_started", round: round})
+}
+
+func (p *recordingProgress) TurnStarted(round int, speaker string) {
+	p.add(progressEvent{typ: "turn_started", round: round, speaker: speaker})
+}
+
+func (p *recordingProgress) Heartbeat(round int, speaker string, silence time.Duration) {
+	p.add(progressEvent{typ: "heartbeat", round: round, speaker: speaker, silenceMS: int64(silence / time.Millisecond)})
+}
+
+func (p *recordingProgress) TurnCompleted(round int, speaker string, duration time.Duration) {
+	p.add(progressEvent{typ: "turn_completed", round: round, speaker: speaker, durationMS: int64(duration / time.Millisecond)})
+}
+
+func (p *recordingProgress) RoundCompleted(round int, duration time.Duration) {
+	p.add(progressEvent{typ: "round_completed", round: round, durationMS: int64(duration / time.Millisecond)})
+}
+
+func (p *recordingProgress) snapshot() []progressEvent {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]progressEvent, len(p.events))
+	copy(out, p.events)
+	return out
+}
 
 // trivialVerdict returns a fixed RoundResult every round.
 type trivialVerdict struct{ result loop.RoundResult }
@@ -475,6 +530,143 @@ func TestOnTurnCallback(t *testing.T) {
 	}
 }
 
+func TestProgressLifecycleOrdering(t *testing.T) {
+	sA := makeSession([]string{"a"})
+	sB := makeSession([]string{"b"})
+	progress := newRecordingProgress()
+
+	cfg := orchestrate.Config{
+		Participants: []orchestrate.Participant{
+			{ID: "A", Session: sA},
+			{ID: "B", Session: sB},
+		},
+		Scheduler: orchestrate.RoundRobin(false),
+		Prompt:    echoPrompt,
+		Verdict:   trivialVerdict{loop.RoundResult{Clean: true}},
+		Limits:    loop.Limits{Max: 5, Settle: 1, Patience: 5},
+		Progress:  progress,
+	}
+
+	_, err := orchestrate.Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	events := progress.snapshot()
+	got := eventTypes(events)
+	want := []string{
+		"round_started",
+		"turn_started",
+		"turn_completed",
+		"turn_started",
+		"turn_completed",
+		"round_completed",
+	}
+	if !equalStrings(got, want) {
+		t.Fatalf("progress event order = %v, want %v", got, want)
+	}
+	if events[1].round != 1 || events[1].speaker != "A" {
+		t.Fatalf("first turn_started = %+v, want round 1 speaker A", events[1])
+	}
+	if events[2].round != 1 || events[2].speaker != "A" {
+		t.Fatalf("first turn_completed = %+v, want round 1 speaker A", events[2])
+	}
+	if events[3].round != 1 || events[3].speaker != "B" {
+		t.Fatalf("second turn_started = %+v, want round 1 speaker B", events[3])
+	}
+}
+
+type blockingSession struct {
+	entered chan struct{}
+	release chan struct{}
+	result  transport.Result
+}
+
+func newBlockingSession(content string) *blockingSession {
+	return &blockingSession{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+		result:  transport.Result{Content: content},
+	}
+}
+
+func (s *blockingSession) Send(ctx context.Context, _ string) (transport.Result, error) {
+	close(s.entered)
+	select {
+	case <-s.release:
+		return s.result, nil
+	case <-ctx.Done():
+		return transport.Result{}, ctx.Err()
+	}
+}
+
+func (s *blockingSession) Close() error { return nil }
+
+func TestProgressHeartbeatDuringBlockedSend(t *testing.T) {
+	session := newBlockingSession("a")
+	progress := newRecordingProgress()
+	cfg := orchestrate.Config{
+		Participants: []orchestrate.Participant{{ID: "A", Session: session}},
+		Scheduler:    orchestrate.RoundRobin(false),
+		Prompt:       echoPrompt,
+		Verdict:      trivialVerdict{loop.RoundResult{Clean: true}},
+		Limits:       loop.Limits{Max: 5, Settle: 1, Patience: 5},
+		Progress:     progress,
+
+		HeartbeatInterval: time.Millisecond,
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := orchestrate.Run(context.Background(), cfg)
+		done <- err
+	}()
+
+	select {
+	case <-session.entered:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("session send did not start")
+	}
+
+	var heartbeat progressEvent
+	for {
+		select {
+		case ev := <-progress.ch:
+			if ev.typ == "heartbeat" {
+				heartbeat = ev
+				goto release
+			}
+		case <-time.After(200 * time.Millisecond):
+			t.Fatal("heartbeat was not emitted while send was blocked")
+		}
+	}
+
+release:
+	if heartbeat.round != 1 || heartbeat.speaker != "A" || heartbeat.silenceMS < 1 {
+		t.Fatalf("heartbeat = %+v, want round 1 speaker A with silence >= 1ms", heartbeat)
+	}
+	close(session.release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("run did not finish after releasing send")
+	}
+
+	events := progress.snapshot()
+	last := events[len(events)-1]
+	if last.typ != "round_completed" {
+		t.Fatalf("last progress event = %+v, want round_completed", last)
+	}
+	for i, ev := range events {
+		if ev.typ == "heartbeat" && i > indexOfEvent(events, "turn_completed") {
+			t.Fatalf("heartbeat emitted after turn_completed: events=%v", events)
+		}
+	}
+}
+
 // TestSessionSendErrorSurfaced verifies that a Send error is returned and partial turns are kept.
 func TestSessionSendErrorSurfaced(t *testing.T) {
 	sendErr := errors.New("send failed")
@@ -514,6 +706,23 @@ func turnContents(turns []orchestrate.Turn) []string {
 		out[i] = turn.Content
 	}
 	return out
+}
+
+func eventTypes(events []progressEvent) []string {
+	out := make([]string, len(events))
+	for i, ev := range events {
+		out[i] = ev.typ
+	}
+	return out
+}
+
+func indexOfEvent(events []progressEvent, typ string) int {
+	for i, ev := range events {
+		if ev.typ == typ {
+			return i
+		}
+	}
+	return len(events)
 }
 
 func equalStrings(a, b []string) bool {

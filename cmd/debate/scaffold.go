@@ -75,7 +75,7 @@ func (c *newCmd) Run(deps *cliDeps) error {
 // It scaffolds a .heurema/debate workspace under workDir, skipping files that already exist.
 func cmdInit(args []string, stdout, stderr io.Writer, workDir string) int {
 	cliArgs := append([]string{"init"}, args...)
-	return parseCLI(cliArgs, stdout, stderr, strings.NewReader(""), false, os.Getenv, defaultResolver, workDir)
+	return parseCLI(cliArgs, stdout, stderr, strings.NewReader(""), defaultResolver, workDir)
 }
 
 func runInit(cmd *initCmd, stdout, stderr io.Writer, workDir string) int {
@@ -130,7 +130,7 @@ func printInitUsage(stderr io.Writer) {
 // It creates a persona file template under the discovered .heurema/debate/personas.
 func cmdNew(args []string, stdout, stderr io.Writer, workDir string) int {
 	cliArgs := append([]string{"new"}, args...)
-	return parseCLI(cliArgs, stdout, stderr, strings.NewReader(""), false, os.Getenv, defaultResolver, workDir)
+	return parseCLI(cliArgs, stdout, stderr, strings.NewReader(""), defaultResolver, workDir)
 }
 
 func runNew(cmd *newCmd, stdout, stderr io.Writer, workDir string) int {

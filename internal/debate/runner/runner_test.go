@@ -1,15 +1,20 @@
 package runner_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/heurema/debate/internal/debate/progress"
 	"github.com/heurema/debate/internal/debate/runner"
 	"github.com/heurema/debate/internal/engine/orchestrate"
 	"github.com/heurema/debate/internal/engine/transport"
@@ -45,6 +50,68 @@ func (t *countingTransport) Open(_ context.Context, spec transport.Spec) (transp
 		return nil, fmt.Errorf("mock: no session configured for id %q", spec.ID)
 	}
 	return s, nil
+}
+
+type sessionTransport struct {
+	sessions map[string]transport.Session
+}
+
+func (t sessionTransport) Open(_ context.Context, spec transport.Spec) (transport.Session, error) {
+	s, ok := t.sessions[spec.ID]
+	if !ok {
+		return nil, fmt.Errorf("mock: no session configured for id %q", spec.ID)
+	}
+	return s, nil
+}
+
+type blockingSession struct {
+	entered chan struct{}
+	release chan struct{}
+	result  transport.Result
+}
+
+func newBlockingSession(content string) *blockingSession {
+	return &blockingSession{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+		result:  transport.Result{Content: content},
+	}
+}
+
+func (s *blockingSession) Send(ctx context.Context, _ string) (transport.Result, error) {
+	close(s.entered)
+	select {
+	case <-s.release:
+		return s.result, nil
+	case <-ctx.Done():
+		return transport.Result{}, ctx.Err()
+	}
+}
+
+func (s *blockingSession) Close() error { return nil }
+
+type progressCapture struct {
+	mu  bytes.Buffer
+	ch  chan string
+	mtx sync.Mutex
+}
+
+func newProgressCapture() *progressCapture {
+	return &progressCapture{ch: make(chan string, 100)}
+}
+
+func (w *progressCapture) Write(p []byte) (int, error) {
+	w.mtx.Lock()
+	w.mu.Write(p)
+	w.mtx.Unlock()
+	w.ch <- string(p)
+	return len(p), nil
+}
+
+func (w *progressCapture) String() string {
+	w.mtx.Lock()
+	defer w.mtx.Unlock()
+	return w.mu.String()
 }
 
 // makeWorkspace creates a minimal .heurema/debate workspace under a temp dir
@@ -121,6 +188,64 @@ func TestRun_Settled(t *testing.T) {
 	}
 	if len(result.Turns) == 0 {
 		t.Error("no turns recorded")
+	}
+}
+
+func TestRun_ProgressLifecycle(t *testing.T) {
+	workDir := makeWorkspace(t, map[string]string{
+		"alice": echoPersonaContent,
+		"bob":   echoPersonaContent,
+	})
+	var stderr bytes.Buffer
+
+	_, err := runner.Run(context.Background(), runner.Config{
+		WorkDir:   workDir,
+		Task:      "track progress",
+		MaxRounds: 1,
+		Resolver: fixedResolver(map[string]*mock.Session{
+			"alice": mock.NewSession([]mock.ScriptedResult{
+				{Result: transport.Result{Content: "A"}},
+			}),
+			"bob": mock.NewSession([]mock.ScriptedResult{
+				{Result: transport.Result{Content: "B"}},
+			}),
+			"synthesizer": mock.NewSession([]mock.ScriptedResult{
+				{Result: transport.Result{Content: "synthesis"}},
+			}),
+		}),
+		Progress: progress.NewEmitter(&stderr),
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	events := parseProgressEvents(t, stderr.String())
+	got := progressTypes(events)
+	want := []string{
+		"run_started",
+		"workspace_loaded",
+		"session_opening",
+		"session_opened",
+		"session_opening",
+		"session_opened",
+		"round_started",
+		"turn_started",
+		"turn_completed",
+		"turn_started",
+		"turn_completed",
+		"round_completed",
+		"synthesis_started",
+		"synthesis_completed",
+		"run_completed",
+	}
+	if !equalStrings(got, want) {
+		t.Fatalf("progress event types = %v, want %v", got, want)
+	}
+	if events[len(events)-1].Stage != "completed" {
+		t.Fatalf("final progress stage = %q, want completed", events[len(events)-1].Stage)
+	}
+	if events[2].Speaker != "alice" || events[4].Speaker != "bob" {
+		t.Fatalf("session events use wrong speakers: %+v", events)
 	}
 }
 
@@ -356,6 +481,173 @@ func TestRun_DoesNotSynthesizeAfterDebateError(t *testing.T) {
 	}
 }
 
+func TestRun_ProgressRunFailedUsesActiveTurnStage(t *testing.T) {
+	workDir := makeWorkspace(t, map[string]string{"alice": echoPersonaContent})
+	sendErr := errors.New("participant failed")
+	var stderr bytes.Buffer
+
+	_, err := runner.Run(context.Background(), runner.Config{
+		WorkDir:   workDir,
+		Task:      "fail during turn",
+		MaxRounds: 1,
+		Resolver: fixedResolver(map[string]*mock.Session{
+			"alice":       mock.NewSession([]mock.ScriptedResult{{Err: sendErr}}),
+			"synthesizer": mock.NewSession([]mock.ScriptedResult{{Result: transport.Result{Content: "unused"}}}),
+		}),
+		Progress: progress.NewEmitter(&stderr),
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	requireRunFailedStage(t, stderr.String(), "running_turn", sendErr.Error())
+}
+
+func TestRun_ProgressRunFailedUsesFailedStageWhenNoLifecycleActive(t *testing.T) {
+	workDir := makeWorkspace(t, map[string]string{"alice": echoPersonaContent})
+	resolverErr := errors.New("resolver failed")
+	var stderr bytes.Buffer
+
+	_, err := runner.Run(context.Background(), runner.Config{
+		WorkDir:   workDir,
+		Task:      "fail before session opening",
+		MaxRounds: 1,
+		Resolver: func(_ string) (transport.Transport, error) {
+			return nil, resolverErr
+		},
+		Progress: progress.NewEmitter(&stderr),
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	requireRunFailedStage(t, stderr.String(), "failed", resolverErr.Error())
+}
+
+func TestRun_ProgressRunFailedUsesOpeningSessionStage(t *testing.T) {
+	workDir := makeWorkspace(t, map[string]string{"alice": echoPersonaContent})
+	var stderr bytes.Buffer
+
+	_, err := runner.Run(context.Background(), runner.Config{
+		WorkDir:   workDir,
+		Task:      "fail opening session",
+		MaxRounds: 1,
+		Resolver: fixedResolver(map[string]*mock.Session{
+			"synthesizer": mock.NewSession([]mock.ScriptedResult{{Result: transport.Result{Content: "unused"}}}),
+		}),
+		Progress: progress.NewEmitter(&stderr),
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	requireRunFailedStage(t, stderr.String(), "opening_session", "no session configured")
+}
+
+func TestRun_ProgressRunFailedUsesSynthesizingStage(t *testing.T) {
+	workDir := makeWorkspace(t, map[string]string{"alice": echoPersonaContent})
+	synthErr := errors.New("synthesizer failed")
+	var stderr bytes.Buffer
+
+	_, err := runner.Run(context.Background(), runner.Config{
+		WorkDir:   workDir,
+		Task:      "fail during synthesis",
+		MaxRounds: 1,
+		Resolver: fixedResolver(map[string]*mock.Session{
+			"alice":       mock.NewSession([]mock.ScriptedResult{{Result: transport.Result{Content: "A"}}}),
+			"synthesizer": mock.NewSession([]mock.ScriptedResult{{Err: synthErr}}),
+		}),
+		Progress: progress.NewEmitter(&stderr),
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	requireRunFailedStage(t, stderr.String(), "synthesizing", synthErr.Error())
+}
+
+func requireRunFailedStage(t *testing.T, text, wantStage, wantError string) {
+	t.Helper()
+	events := parseProgressEvents(t, text)
+	last := events[len(events)-1]
+	if last.Type != "run_failed" {
+		t.Fatalf("last event type = %q, want run_failed; events=%v", last.Type, progressTypes(events))
+	}
+	if last.Stage != wantStage {
+		t.Fatalf("run_failed stage = %q, want %s", last.Stage, wantStage)
+	}
+	if !strings.Contains(last.Error, wantError) {
+		t.Fatalf("run_failed error = %q, want to include %q", last.Error, wantError)
+	}
+}
+
+func TestRun_SynthesisHeartbeatHasSynthesizingStageOnly(t *testing.T) {
+	workDir := makeWorkspace(t, map[string]string{"alice": echoPersonaContent})
+	synth := newBlockingSession("synthesis")
+	capture := newProgressCapture()
+
+	resolver := func(_ string) (transport.Transport, error) {
+		return sessionTransport{sessions: map[string]transport.Session{
+			"alice": mock.NewSession([]mock.ScriptedResult{
+				{Result: transport.Result{Content: "A"}},
+			}),
+			"synthesizer": synth,
+		}}, nil
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := runner.Run(context.Background(), runner.Config{
+			WorkDir:           workDir,
+			Task:              "synth heartbeat",
+			MaxRounds:         1,
+			Resolver:          resolver,
+			Progress:          progress.NewEmitter(capture),
+			HeartbeatInterval: time.Millisecond,
+		})
+		done <- err
+	}()
+
+	select {
+	case <-synth.entered:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("synthesizer send did not start")
+	}
+
+	var heartbeat progressWireEvent
+	for {
+		select {
+		case line := <-capture.ch:
+			events := parseProgressEvents(t, line)
+			for _, ev := range events {
+				if ev.Type == "heartbeat" && ev.Stage == "synthesizing" {
+					heartbeat = ev
+					goto release
+				}
+			}
+		case <-time.After(200 * time.Millisecond):
+			t.Fatal("synthesizer heartbeat was not emitted")
+		}
+	}
+
+release:
+	if heartbeat.SilenceMS == nil || *heartbeat.SilenceMS < 1 {
+		t.Fatalf("heartbeat silence_ms = %v, want >= 1", heartbeat.SilenceMS)
+	}
+	if heartbeat.Round != nil || heartbeat.Speaker != "" {
+		t.Fatalf("synthesizer heartbeat invented round/speaker: %+v", heartbeat)
+	}
+	close(synth.release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("run did not finish after releasing synthesizer")
+	}
+}
+
 func TestRun_OnTurnFires(t *testing.T) {
 	workDir := makeWorkspace(t, map[string]string{"alice": echoPersonaContent})
 
@@ -381,4 +673,67 @@ func notDoneScripts(n int, content string) []mock.ScriptedResult {
 		out[i] = mock.ScriptedResult{Result: transport.Result{Content: content}}
 	}
 	return out
+}
+
+type progressWireEvent struct {
+	Version    int    `json:"version"`
+	Type       string `json:"type"`
+	Stage      string `json:"stage"`
+	ElapsedMS  int64  `json:"elapsed_ms"`
+	DurationMS *int64 `json:"duration_ms,omitempty"`
+	SilenceMS  *int64 `json:"silence_ms,omitempty"`
+	Round      *int   `json:"round,omitempty"`
+	Speaker    string `json:"speaker,omitempty"`
+	Error      string `json:"error,omitempty"`
+}
+
+func parseProgressEvents(t *testing.T, text string) []progressWireEvent {
+	t.Helper()
+	var events []progressWireEvent
+	for _, line := range strings.Split(text, "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, progress.Prefix) {
+			t.Fatalf("progress line missing prefix %q: %q", progress.Prefix, line)
+		}
+		var ev progressWireEvent
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, progress.Prefix)), &ev); err != nil {
+			t.Fatalf("invalid progress JSON %q: %v", line, err)
+		}
+		if ev.Version != 1 {
+			t.Fatalf("progress version = %d, want 1 in %q", ev.Version, line)
+		}
+		if ev.Type == "" || ev.Stage == "" {
+			t.Fatalf("progress event missing type/stage: %+v", ev)
+		}
+		if ev.ElapsedMS < 0 {
+			t.Fatalf("progress elapsed_ms is negative: %+v", ev)
+		}
+		events = append(events, ev)
+	}
+	if len(events) == 0 {
+		t.Fatal("no progress events parsed")
+	}
+	return events
+}
+
+func progressTypes(events []progressWireEvent) []string {
+	out := make([]string, len(events))
+	for i, ev := range events {
+		out[i] = ev.Type
+	}
+	return out
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

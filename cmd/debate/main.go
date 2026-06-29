@@ -11,8 +11,8 @@ import (
 	"github.com/alecthomas/kong"
 	"github.com/heurema/debate/internal/backend/acp"
 	"github.com/heurema/debate/internal/backend/exec"
+	"github.com/heurema/debate/internal/debate/progress"
 	"github.com/heurema/debate/internal/debate/runner"
-	"github.com/heurema/debate/internal/engine/orchestrate"
 	"github.com/heurema/debate/internal/engine/transport"
 	"github.com/heurema/debate/internal/engine/transport/echo"
 )
@@ -21,18 +21,8 @@ import (
 var Version = "dev"
 
 func main() {
-	isTerminal := stderrIsTerminal()
-	code := parseCLI(os.Args[1:], os.Stdout, os.Stderr, os.Stdin, isTerminal, os.Getenv, defaultResolver, "")
+	code := parseCLI(os.Args[1:], os.Stdout, os.Stderr, os.Stdin, defaultResolver, "")
 	os.Exit(code)
-}
-
-// stderrIsTerminal reports whether os.Stderr is a character device (i.e., a TTY).
-func stderrIsTerminal() bool {
-	fi, err := os.Stderr.Stat()
-	if err != nil {
-		return false
-	}
-	return fi.Mode()&os.ModeCharDevice != 0
 }
 
 // defaultResolver resolves backend identifiers to transports.
@@ -59,8 +49,6 @@ type cliDeps struct {
 	stdout     io.Writer
 	stderr     io.Writer
 	stdin      io.Reader
-	isTerminal bool
-	getEnv     func(string) string
 	resolver   runner.Resolver
 	workDir    string
 	getWorkDir func() (string, error)
@@ -73,8 +61,8 @@ type runCmd struct {
 	SynthOverride string   `name:"synth" help:"Override synthesizer persona id."`
 	TaskFlag      string   `name:"task" help:"Task text, @file, or - for stdin."`
 	MaxRounds     int      `name:"max-rounds" default:"10" help:"Maximum debate rounds."`
-	JSONOut       bool     `name:"json" help:"Write JSON result to stdout, suppress stderr trace."`
-	Quiet         bool     `name:"quiet" short:"q" help:"Suppress stderr debate trace."`
+	JSONOut       bool     `name:"json" help:"Write JSON result to stdout."`
+	Quiet         bool     `name:"quiet" short:"q" help:"Suppress stderr progress events."`
 	Sealed        bool     `name:"sealed" help:"Read-only intent threaded into transport specs."`
 	Task          []string `arg:"" optional:"" name:"task" help:"Task text."`
 }
@@ -88,7 +76,7 @@ func (c *runCmd) Run(deps *cliDeps) error {
 		deps.code = 1
 		return nil
 	}
-	deps.code = runDebate(c, deps.stdout, deps.stderr, deps.stdin, deps.isTerminal, deps.getEnv, deps.resolver, workDir)
+	deps.code = runDebate(c, deps.stdout, deps.stderr, deps.stdin, deps.resolver, workDir)
 	return nil
 }
 
@@ -102,16 +90,14 @@ func parseCLI(
 	args []string,
 	stdout, stderr io.Writer,
 	stdin io.Reader,
-	isTerminal bool,
-	getEnv func(string) string,
 	resolver runner.Resolver,
 	workDir string,
 ) int {
 	if len(args) > 0 && isNamedCommand(args[0]) {
 		var app cli
-		return parseAndDispatch(&app, args, stdout, stderr, stdin, isTerminal, getEnv, resolver, workDir)
+		return parseAndDispatch(&app, args, stdout, stderr, stdin, resolver, workDir)
 	}
-	return parseAndRun(args, stdout, stderr, stdin, isTerminal, getEnv, resolver, workDir)
+	return parseAndRun(args, stdout, stderr, stdin, resolver, workDir)
 }
 
 func isNamedCommand(arg string) bool {
@@ -128,8 +114,6 @@ func parseAndDispatch(
 	args []string,
 	stdout, stderr io.Writer,
 	stdin io.Reader,
-	isTerminal bool,
-	getEnv func(string) string,
 	resolver runner.Resolver,
 	workDir string,
 ) int {
@@ -137,8 +121,6 @@ func parseAndDispatch(
 		stdout:     stdout,
 		stderr:     stderr,
 		stdin:      stdin,
-		isTerminal: isTerminal,
-		getEnv:     getEnv,
 		resolver:   resolver,
 		workDir:    workDir,
 		getWorkDir: os.Getwd,
@@ -203,13 +185,11 @@ func parseAndRun(
 	args []string,
 	stdout, stderr io.Writer,
 	stdin io.Reader,
-	isTerminal bool,
-	getEnv func(string) string,
 	resolver runner.Resolver,
 	workDir string,
 ) int {
 	var cmd runCmd
-	return parseAndDispatch(&cmd, args, stdout, stderr, stdin, isTerminal, getEnv, resolver, workDir)
+	return parseAndDispatch(&cmd, args, stdout, stderr, stdin, resolver, workDir)
 }
 
 func validateWithSelectorValue(value string) error {
@@ -225,8 +205,6 @@ func runDebate(
 	cmd *runCmd,
 	stdout, stderr io.Writer,
 	stdin io.Reader,
-	isTerminal bool,
-	getEnv func(string) string,
 	resolver runner.Resolver,
 	workDir string,
 ) int {
@@ -246,15 +224,9 @@ func runDebate(
 		return 1
 	}
 
-	// Trace to stderr when: not quiet, not JSON, and (it's a TTY or DEBATE_FORCE_TRACE=1).
-	forceTrace := getEnv("DEBATE_FORCE_TRACE") == "1"
-	traceEnabled := !cmd.Quiet && !cmd.JSONOut && (isTerminal || forceTrace)
-
-	var onTurn func(orchestrate.Turn)
-	if traceEnabled {
-		onTurn = func(t orchestrate.Turn) {
-			fmt.Fprintf(stderr, "[Round %d — %s]\n%s\n\n", t.Round, t.Speaker, t.Content)
-		}
+	var progressSink runner.Progress
+	if !cmd.Quiet {
+		progressSink = progress.NewEmitter(stderr)
 	}
 
 	cfg := runner.Config{
@@ -265,8 +237,8 @@ func runDebate(
 		Task:          task,
 		MaxRounds:     cmd.MaxRounds,
 		Sealed:        cmd.Sealed,
-		OnTurn:        onTurn,
 		Resolver:      resolver,
+		Progress:      progressSink,
 	}
 
 	result, err := runner.Run(context.Background(), cfg)
@@ -294,7 +266,7 @@ func runDebate(
 		}
 		out := jsonResult{
 			Answer:  result.Answer,
-			Outcome: outcomeString(result.Outcome.Reason),
+			Outcome: result.Outcome.Reason,
 			Rounds:  result.Outcome.Rounds,
 			Turns:   turns,
 		}
@@ -326,16 +298,6 @@ func normalizeWithSelectors(values []string) ([]string, error) {
 		}
 	}
 	return selectors, nil
-}
-
-// outcomeString normalises the loop reason to a user-facing string.
-func outcomeString(reason string) string {
-	switch reason {
-	case "settled", "stalemate", "max":
-		return reason
-	default:
-		return reason
-	}
 }
 
 // exitCode maps loop outcome reasons to process exit codes.
