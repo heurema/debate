@@ -6,6 +6,9 @@ agents:
   - name: codex-xhigh
     model: gpt-5.5
     effort: xhigh
+  - name: claude-sonnet-5
+    model: claude-sonnet-5
+    effort: high
   - name: opus-xhigh
     model: claude-opus-4-8
     effort: xhigh
@@ -20,7 +23,7 @@ pipeline:
       patience: 0
       settle: 0
   execute:
-    by: codex-high
+    by: claude-sonnet-5
   contract_review:
     by: codex-xhigh
     loop:
