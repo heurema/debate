@@ -22,6 +22,7 @@ It gives each participant a persona, collects their arguments round by round, an
 - Supports proposer/skeptic style review loops and optional synthesis.
 - Can emit human-readable output or JSON for automation.
 - Keeps backend selection in persona files instead of hard-coding one model.
+- `debate init` installs or repairs a global Agent Skill for detected local agent clients, so those agents already know how to drive this CLI.
 
 ## Quick Start
 
@@ -57,7 +58,7 @@ Ask for machine-readable output:
 
 ## Workspace Layout
 
-After `debate init`, the project-local state lives under `.heurema/debate`:
+After `debate init`, the initial project-local state lives under `.heurema/debate`:
 
 ```text
 .heurema/
@@ -65,14 +66,12 @@ After `debate init`, the project-local state lives under `.heurema/debate`:
     personas/
       proposer.md
       skeptic.md
-      reviewers/
-        security.md
     tables/
       default.yml
-      architecture.yml
 ```
 
 Commands that read an existing workspace discover the nearest ancestor containing `.heurema/debate`, starting with the current directory. `debate init` is the exception: it creates the scaffold in the current directory.
+Additional persona namespaces and table files are user-created.
 
 Each persona file is a Markdown document with YAML front matter:
 
@@ -103,6 +102,19 @@ panel:
 ```
 
 A run without `--with` uses `--table <name>` or `tables/default.yml`. Table files require `version: 1` and a non-empty `panel`. The optional `synth` field chooses the synthesizer for that table. Tables are flat YAML files, table names do not contain `/`, and panel order is preserved.
+
+## Global Agent Skill
+
+`debate init` also installs or repairs one global [Agent Skill](https://code.claude.com/docs/en/skills) named `debate` for detected local agent clients, so agents already know how to drive the CLI without extra prompting. This is separate from the project-local `.heurema/debate` scaffold above and only happens during `init` — ordinary `debate` runs, `debate new`, and `debate version` never write to your home directory.
+
+Install targets depend on what init detects on `PATH` or in your home directory:
+
+- `~/.agents/skills/debate` — the standard Agent Skills path, installed when `codex` or `gemini` is found on `PATH`, or `~/.agents` already exists.
+- `~/.claude/skills/debate` — a Claude Code compatibility copy, installed when `claude` is found on `PATH`, or `~/.claude` already exists.
+
+Both targets can be installed at once; detecting both Codex and Gemini still installs only the one standard target. No separate `~/.codex/skills` or `~/.gemini/skills` copy is created in v1. If no supported client is detected, init reports the skip with an explanatory warning and does not create any of these directories.
+
+Installation is idempotent and safe to repeat: each managed copy carries a small `.debate-skill.json` metadata file recording a content checksum, so re-running `debate init` leaves an unmodified copy alone (reported as current), refreshes it when the bundled skill content has changed, and preserves — with a warning — any copy that was edited locally or isn't recognizably debate-managed. There is no separate `debate skills` command; re-running `debate init` is the v1 install/repair path.
 
 ## Personas
 
@@ -139,6 +151,8 @@ Selection precedence is:
 
 - panel: `--with` in the provided order, otherwise the selected table panel
 - synthesizer: `--synth`, then selected table `synth`, then a uniquely resolved `synthesizer` persona, then the built-in default
+
+The built-in default synthesizer is capability-aware: when every panel persona shares one backend family (all Claude, all Codex, or all Gemini/`agy`), it matches that family; otherwise it detects the first supported local runtime on `PATH` (`claude`, then `codex`, then `agy`/`gemini`). Starter personas from `debate init` follow the same detection and precedence for their own default `model`/`backend`. If neither resolves, the run fails before opening any session with an actionable error telling you to add `--synth`, a table `synth`, a synthesizer persona, or set persona backend/model explicitly.
 
 For deterministic local smoke tests, point a persona at the echo backend:
 

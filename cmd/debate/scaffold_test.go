@@ -8,12 +8,44 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/heurema/debate/internal/debate/capability"
 	"github.com/heurema/debate/internal/debate/config"
 	"github.com/heurema/debate/internal/debate/persona"
 )
 
+// fakeEnvironment overrides the lookExecutable and userHomeDir test seams so
+// that runInit's capability detection and skill installation never touch the
+// real PATH or the real user home directory. It restores both after the test.
+// found lists which of claude/codex/agy/gemini executables are simulated on
+// PATH; home is used as the fake HOME for global skill installation.
+func fakeEnvironment(t *testing.T, home string, found ...string) {
+	t.Helper()
+	fakeEnvironmentWithHome(t, func() (string, error) { return home, nil }, found...)
+}
+
+func fakeEnvironmentWithHome(t *testing.T, homeFn func() (string, error), found ...string) {
+	t.Helper()
+	origLook, origHome := lookExecutable, userHomeDir
+	set := make(map[string]bool, len(found))
+	for _, f := range found {
+		set[f] = true
+	}
+	lookExecutable = func(name string) (string, error) {
+		if set[name] {
+			return "/usr/bin/" + name, nil
+		}
+		return "", errors.New("not found")
+	}
+	userHomeDir = homeFn
+	t.Cleanup(func() {
+		lookExecutable = origLook
+		userHomeDir = origHome
+	})
+}
+
 func TestCmdInit_CreatesWorkspaceThatLoads(t *testing.T) {
 	workDir := t.TempDir()
+	fakeEnvironment(t, t.TempDir(), "claude")
 	var out, errout bytes.Buffer
 	code := cmdInit(nil, &out, &errout, workDir)
 	if code != 0 {
@@ -54,6 +86,7 @@ func TestCmdInit_CreatesWorkspaceThatLoads(t *testing.T) {
 
 func TestCmdInit_StarterPersonasParseable(t *testing.T) {
 	workDir := t.TempDir()
+	fakeEnvironment(t, t.TempDir(), "claude")
 	if code := cmdInit(nil, &bytes.Buffer{}, &bytes.Buffer{}, workDir); code != 0 {
 		t.Fatal("cmdInit failed")
 	}
@@ -76,6 +109,7 @@ func TestCmdInit_StarterPersonasParseable(t *testing.T) {
 
 func TestCmdInit_DoesNotOverwriteExisting(t *testing.T) {
 	workDir := t.TempDir()
+	fakeEnvironment(t, t.TempDir(), "claude")
 	if code := cmdInit(nil, &bytes.Buffer{}, &bytes.Buffer{}, workDir); code != 0 {
 		t.Fatal("first cmdInit failed")
 	}
@@ -107,6 +141,7 @@ func TestCmdInit_DoesNotOverwriteExisting(t *testing.T) {
 
 func TestCmdInit_ExtraArgsError(t *testing.T) {
 	workDir := t.TempDir()
+	fakeEnvironment(t, t.TempDir(), "claude")
 	var errout bytes.Buffer
 	code := cmdInit([]string{"unexpected"}, &bytes.Buffer{}, &errout, workDir)
 	if code == 0 {
@@ -116,6 +151,7 @@ func TestCmdInit_ExtraArgsError(t *testing.T) {
 
 func TestCmdNew_CreatesPersonaThatParses(t *testing.T) {
 	workDir := t.TempDir()
+	fakeEnvironment(t, t.TempDir(), "claude")
 	if code := cmdInit(nil, &bytes.Buffer{}, &bytes.Buffer{}, workDir); code != 0 {
 		t.Fatal("cmdInit failed")
 	}
@@ -144,6 +180,7 @@ func TestCmdNew_CreatesPersonaThatParses(t *testing.T) {
 
 func TestCmdNew_SynthesizerRole(t *testing.T) {
 	workDir := t.TempDir()
+	fakeEnvironment(t, t.TempDir(), "claude")
 	if code := cmdInit(nil, &bytes.Buffer{}, &bytes.Buffer{}, workDir); code != 0 {
 		t.Fatal("cmdInit failed")
 	}
@@ -166,6 +203,7 @@ func TestCmdNew_SynthesizerRole(t *testing.T) {
 
 func TestCmdNew_CreatesNamespacedPersona(t *testing.T) {
 	workDir := t.TempDir()
+	fakeEnvironment(t, t.TempDir(), "claude")
 	if code := cmdInit(nil, &bytes.Buffer{}, &bytes.Buffer{}, workDir); code != 0 {
 		t.Fatal("cmdInit failed")
 	}
@@ -200,6 +238,7 @@ func TestCmdNew_RoleFlagBeforeAndAfterName(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			workDir := t.TempDir()
+			fakeEnvironment(t, t.TempDir(), "claude")
 			if code := cmdInit(nil, &bytes.Buffer{}, &bytes.Buffer{}, workDir); code != 0 {
 				t.Fatal("cmdInit failed")
 			}
@@ -225,6 +264,7 @@ func TestCmdNew_RoleFlagBeforeAndAfterName(t *testing.T) {
 
 func TestCmdNew_RefusesOverwrite(t *testing.T) {
 	workDir := t.TempDir()
+	fakeEnvironment(t, t.TempDir(), "claude")
 	if code := cmdInit(nil, &bytes.Buffer{}, &bytes.Buffer{}, workDir); code != 0 {
 		t.Fatal("cmdInit failed")
 	}
@@ -268,6 +308,7 @@ func TestCmdNew_RequiresWorkspace(t *testing.T) {
 
 func TestCmdNew_InvalidRole(t *testing.T) {
 	workDir := t.TempDir()
+	fakeEnvironment(t, t.TempDir(), "claude")
 	if code := cmdInit(nil, &bytes.Buffer{}, &bytes.Buffer{}, workDir); code != 0 {
 		t.Fatal("cmdInit failed")
 	}
@@ -305,5 +346,259 @@ func TestCmdNew_CreatesPersonasDirIfAbsent(t *testing.T) {
 	personaPath := filepath.Join(debDir, "personas", "analyst.md")
 	if _, err := os.Stat(personaPath); err != nil {
 		t.Errorf("expected persona file to exist: %v", err)
+	}
+}
+
+func TestRunInit_StarterPersonaDefaults_CapabilityAware(t *testing.T) {
+	cases := []struct {
+		name    string
+		found   []string
+		model   string
+		backend string
+	}{
+		{"claude", []string{"claude"}, capability.Claude.Model, capability.Claude.Backend},
+		{"codex", []string{"codex"}, capability.Codex.Model, capability.Codex.Backend},
+		{"agy", []string{"agy"}, capability.Gemini.Model, capability.Gemini.Backend},
+		{"gemini", []string{"gemini"}, capability.Gemini.Model, capability.Gemini.Backend},
+		{"claude and codex prefers claude", []string{"claude", "codex"}, capability.Claude.Model, capability.Claude.Backend},
+		{"codex and agy prefers codex", []string{"codex", "agy"}, capability.Codex.Model, capability.Codex.Backend},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			workDir := t.TempDir()
+			fakeEnvironment(t, t.TempDir(), tc.found...)
+			var out, errout bytes.Buffer
+			if code := cmdInit(nil, &out, &errout, workDir); code != 0 {
+				t.Fatalf("cmdInit exit non-zero: stderr=%q", errout.String())
+			}
+			personasDir := filepath.Join(workDir, ".heurema", "debate", "personas")
+			for _, name := range []string{"proposer", "skeptic"} {
+				p, err := persona.ParseFile(filepath.Join(personasDir, name+".md"))
+				if err != nil {
+					t.Fatalf("persona.ParseFile(%s): %v", name, err)
+				}
+				if p.Model != tc.model || p.Backend != tc.backend {
+					t.Errorf("%s: (Model, Backend) = (%q, %q), want (%q, %q)", name, p.Model, p.Backend, tc.model, tc.backend)
+				}
+			}
+			if strings.Contains(errout.String(), "unset") {
+				t.Errorf("unexpected unset-placeholder warning when a supported executable is detected: %q", errout.String())
+			}
+		})
+	}
+}
+
+func TestRunInit_NoSupportedExecutable_UsesUnsetPlaceholderAndWarns(t *testing.T) {
+	workDir := t.TempDir()
+	fakeEnvironment(t, t.TempDir()) // no executables found
+	var out, errout bytes.Buffer
+	if code := cmdInit(nil, &out, &errout, workDir); code != 0 {
+		t.Fatalf("cmdInit exit non-zero: stderr=%q", errout.String())
+	}
+
+	personasDir := filepath.Join(workDir, ".heurema", "debate", "personas")
+	proposerPath := filepath.Join(personasDir, "proposer.md")
+	skepticPath := filepath.Join(personasDir, "skeptic.md")
+	for _, path := range []string{proposerPath, skepticPath} {
+		p, err := persona.ParseFile(path)
+		if err != nil {
+			t.Fatalf("persona.ParseFile(%s): %v", path, err)
+		}
+		if p.Model != "unset" || p.Backend != "unset" {
+			t.Errorf("%s: (Model, Backend) = (%q, %q), want (unset, unset)", path, p.Model, p.Backend)
+		}
+	}
+
+	// Exactly one warning names the starter personas (a separate warning about
+	// no detected skill-install client is also expected and is not counted here).
+	occurrences := strings.Count(errout.String(), proposerPath)
+	if occurrences != 1 {
+		t.Fatalf("expected exactly one warning naming %s, got %d: %q", proposerPath, occurrences, errout.String())
+	}
+	for _, want := range []string{proposerPath, skepticPath, "unset", "claude, codex, agy, or gemini"} {
+		if !strings.Contains(errout.String(), want) {
+			t.Errorf("warning missing %q: %q", want, errout.String())
+		}
+	}
+}
+
+func TestRunInit_NoSupportedExecutable_WarnsOnlyForCreatedUnsetPersonas(t *testing.T) {
+	workDir := t.TempDir()
+	fakeEnvironment(t, t.TempDir()) // no executables found
+	personasDir := filepath.Join(workDir, ".heurema", "debate", "personas")
+	if err := os.MkdirAll(personasDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	proposerPath := filepath.Join(personasDir, "proposer.md")
+	if err := os.WriteFile(proposerPath, []byte(personaTemplate("debater", capability.Claude, proposerBody)), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errout bytes.Buffer
+	if code := cmdInit(nil, &out, &errout, workDir); code != 0 {
+		t.Fatalf("cmdInit exit non-zero: stderr=%q", errout.String())
+	}
+
+	skepticPath := filepath.Join(personasDir, "skeptic.md")
+	stderr := errout.String()
+	if strings.Contains(stderr, proposerPath) {
+		t.Fatalf("warning should not claim the preserved proposer was set to unset: %q", stderr)
+	}
+	for _, want := range []string{skepticPath, "unset", "claude, codex, agy, or gemini"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("warning missing %q: %q", want, stderr)
+		}
+	}
+}
+
+func TestRunInit_ExistingHomeDirsDoNotAffectPersonaDefaults(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".agents"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	workDir := t.TempDir()
+	fakeEnvironment(t, home) // no executables found, despite existing home dirs
+	var out, errout bytes.Buffer
+	if code := cmdInit(nil, &out, &errout, workDir); code != 0 {
+		t.Fatalf("cmdInit exit non-zero: stderr=%q", errout.String())
+	}
+
+	p, err := persona.ParseFile(filepath.Join(workDir, ".heurema", "debate", "personas", "proposer.md"))
+	if err != nil {
+		t.Fatalf("persona.ParseFile: %v", err)
+	}
+	if p.Model != "unset" || p.Backend != "unset" {
+		t.Errorf("(Model, Backend) = (%q, %q), want (unset, unset); existing home dirs must not choose runtime defaults", p.Model, p.Backend)
+	}
+}
+
+func TestRunInit_SkillInstall_MissingHomeStillSucceeds(t *testing.T) {
+	workDir := t.TempDir()
+	fakeEnvironmentWithHome(t, func() (string, error) {
+		return "", errors.New("home unavailable")
+	}, "claude")
+	var out, errout bytes.Buffer
+	if code := cmdInit(nil, &out, &errout, workDir); code != 0 {
+		t.Fatalf("cmdInit exit non-zero: stderr=%q", errout.String())
+	}
+
+	if !strings.Contains(errout.String(), "HOME is not set") {
+		t.Fatalf("expected missing-HOME warning, got stderr=%q", errout.String())
+	}
+	if strings.Contains(out.String(), ".agents/skills/debate") || strings.Contains(out.String(), ".claude/skills/debate") {
+		t.Fatalf("missing HOME should not report a global skill target, got stdout=%q", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(workDir, ".heurema", "debate", "tables", "default.yml")); err != nil {
+		t.Fatalf("init should still create the workspace when HOME is missing: %v", err)
+	}
+}
+
+func TestRunInit_SkillInstall_ClientDetectionMatrix(t *testing.T) {
+	cases := []struct {
+		name       string
+		found      []string
+		wantAgents bool
+		wantClaude bool
+	}{
+		{"none", nil, false, false},
+		{"codex", []string{"codex"}, true, false},
+		{"gemini", []string{"gemini"}, true, false},
+		{"claude", []string{"claude"}, false, true},
+		{"codex and claude", []string{"codex", "claude"}, true, true},
+		{"codex and gemini", []string{"codex", "gemini"}, true, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			workDir := t.TempDir()
+			fakeEnvironment(t, home, tc.found...)
+			var out, errout bytes.Buffer
+			if code := cmdInit(nil, &out, &errout, workDir); code != 0 {
+				t.Fatalf("cmdInit exit non-zero: stderr=%q", errout.String())
+			}
+
+			agentsPath := filepath.Join(home, ".agents", "skills", "debate")
+			claudePath := filepath.Join(home, ".claude", "skills", "debate")
+			if _, err := os.Stat(agentsPath); (err == nil) != tc.wantAgents {
+				t.Errorf("agents skill target exists = %v, want %v", err == nil, tc.wantAgents)
+			}
+			if _, err := os.Stat(claudePath); (err == nil) != tc.wantClaude {
+				t.Errorf("claude skill target exists = %v, want %v", err == nil, tc.wantClaude)
+			}
+			for _, sub := range []string{".codex", ".gemini"} {
+				if _, err := os.Stat(filepath.Join(home, sub)); !os.IsNotExist(err) {
+					t.Errorf("%s should never be created by skill installation", sub)
+				}
+			}
+			if !tc.wantAgents && !tc.wantClaude {
+				if !strings.Contains(errout.String(), "warning:") {
+					t.Errorf("expected an explanatory warning when no client is detected, got stderr=%q", errout.String())
+				}
+			}
+		})
+	}
+}
+
+func TestRunInit_SkillInstall_IdempotentAndPreservesLocalEdits(t *testing.T) {
+	home := t.TempDir()
+	workDir := t.TempDir()
+	fakeEnvironment(t, home, "claude")
+
+	var out1 bytes.Buffer
+	if code := cmdInit(nil, &out1, &bytes.Buffer{}, workDir); code != 0 {
+		t.Fatal("first cmdInit failed")
+	}
+	target := filepath.Join(home, ".claude", "skills", "debate")
+	if !strings.Contains(out1.String(), "created "+target) {
+		t.Fatalf("expected first init to report created %s, got: %q", target, out1.String())
+	}
+
+	// Re-running init on unmodified content is idempotent.
+	workDir2 := t.TempDir()
+	var out2 bytes.Buffer
+	if code := cmdInit(nil, &out2, &bytes.Buffer{}, workDir2); code != 0 {
+		t.Fatal("second cmdInit failed")
+	}
+	if !strings.Contains(out2.String(), target) || strings.Contains(out2.String(), "created "+target) {
+		t.Errorf("expected second init to report the target as current/skipped, not created, got: %q", out2.String())
+	}
+
+	// Locally modifying the installed skill preserves it on the next init.
+	if err := os.WriteFile(filepath.Join(target, "SKILL.md"), []byte("locally edited"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	workDir3 := t.TempDir()
+	var out3, errout3 bytes.Buffer
+	if code := cmdInit(nil, &out3, &errout3, workDir3); code != 0 {
+		t.Fatal("third cmdInit failed")
+	}
+	if !strings.Contains(errout3.String(), "warning:") {
+		t.Errorf("expected a warning for the locally modified target, got stderr=%q", errout3.String())
+	}
+	data, err := os.ReadFile(filepath.Join(target, "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "locally edited" {
+		t.Errorf("locally edited content was overwritten: %q", data)
+	}
+}
+
+func TestNoDebateSkillsCommand(t *testing.T) {
+	if isNamedCommand("skills") {
+		t.Fatal("\"skills\" must not be registered as a named command")
+	}
+
+	// With no workspace present, "debate skills" is treated as a run task and
+	// fails through the normal CLI error path rather than any dedicated
+	// skill-management command.
+	workDir := t.TempDir()
+	var errout bytes.Buffer
+	code := parseCLI([]string{"skills"}, &bytes.Buffer{}, &errout, strings.NewReader(""), echoAll, workDir)
+	if code == 0 {
+		t.Error("expected non-zero exit for \"debate skills\" with no workspace present")
 	}
 }

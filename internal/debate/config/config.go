@@ -13,6 +13,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/heurema/debate/internal/debate/capability"
 	"github.com/heurema/debate/internal/debate/persona"
 )
 
@@ -23,10 +24,15 @@ const (
 	tablesDirName    = "tables"
 	defaultTableName = "default"
 
-	defaultSynthModel  = "claude-haiku-4-5"
 	defaultSynthEffort = "low"
 	defaultSynthSystem = "You are a neutral synthesizer. Review the discussion and produce a concise synthesis: areas of agreement, unresolved objections, and a proposed resolution."
 )
+
+// LookPath resolves an executable's path for the built-in synthesizer
+// fallback's capability detection (see capability.Detect). Overridable in
+// tests to simulate different local agent tooling without touching the real
+// PATH.
+var LookPath capability.LookPath = capability.DefaultLookup
 
 // Workspace holds all loaded and resolved debate workspace data.
 type Workspace struct {
@@ -129,7 +135,7 @@ func Load(startDir, tableName string, withList []string, synthOverride string) (
 	if haveTable {
 		synthSelector = selectedTable.Synth
 	}
-	synth, err := resolveSynthesizer(byID, synthOverride, synthSelector)
+	synth, err := resolveSynthesizer(byID, synthOverride, synthSelector, panel)
 	if err != nil {
 		return Workspace{}, err
 	}
@@ -341,7 +347,7 @@ func resolvePanel(byID map[string]persona.Persona, selectors []string) ([]person
 	return panel, nil
 }
 
-func resolveSynthesizer(byID map[string]persona.Persona, override, tableSynth string) (persona.Persona, error) {
+func resolveSynthesizer(byID map[string]persona.Persona, override, tableSynth string, panel []persona.Persona) (persona.Persona, error) {
 	if override != "" {
 		return resolveSynthSelector(byID, override, "synthesizer")
 	}
@@ -357,7 +363,7 @@ func resolveSynthesizer(byID map[string]persona.Persona, override, tableSynth st
 		return p, nil
 	}
 	if isNotFound(err) {
-		return buildDefaultSynthesizer()
+		return buildDefaultSynthesizer(panel)
 	}
 	return persona.Persona{}, fmt.Errorf("synthesizer: %w", err)
 }
@@ -426,20 +432,47 @@ func shortName(id string) string {
 	return id
 }
 
-func buildDefaultSynthesizer() (persona.Persona, error) {
-	backend, err := persona.InferBackend(defaultSynthModel)
-	if err != nil {
-		return persona.Persona{}, fmt.Errorf("default synthesizer: %w", err)
+// buildDefaultSynthesizer resolves the built-in fallback synthesizer's
+// (model, backend) pair capability-aware: when every panel persona shares one
+// supported backend family, it reuses that family; otherwise it falls back to
+// the same executable-on-PATH detection precedence used for starter persona
+// defaults. It fails with an actionable error before any session opens when
+// neither resolves.
+func buildDefaultSynthesizer(panel []persona.Persona) (persona.Persona, error) {
+	family, ok := homogeneousFamily(panel)
+	if !ok {
+		family, ok = capability.Detect(LookPath)
+	}
+	if !ok {
+		return persona.Persona{}, fmt.Errorf(
+			"default synthesizer: no supported backend detected (claude, codex, agy, or gemini not found on PATH) " +
+				"and the debate panel does not share a single supported backend family; " +
+				"add --synth, add a table synth, create a synthesizer persona, or set persona backend/model explicitly")
 	}
 	return persona.Persona{
 		ID:      "synthesizer",
 		Role:    "synthesizer",
-		Model:   defaultSynthModel,
+		Model:   family.Model,
 		Effort:  defaultSynthEffort,
-		Backend: backend,
+		Backend: family.Backend,
 		Tags:    []string{},
 		System:  defaultSynthSystem,
 	}, nil
+}
+
+// homogeneousFamily reports the shared v1 backend family when every panel
+// persona resolves to the same supported backend.
+func homogeneousFamily(panel []persona.Persona) (capability.Family, bool) {
+	if len(panel) == 0 {
+		return capability.Family{}, false
+	}
+	backend := panel[0].Backend
+	for _, p := range panel[1:] {
+		if p.Backend != backend {
+			return capability.Family{}, false
+		}
+	}
+	return capability.FamilyForBackend(backend)
 }
 
 func isHidden(name string) bool {

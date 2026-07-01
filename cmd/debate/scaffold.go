@@ -8,7 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/heurema/debate/internal/debate/capability"
 	"github.com/heurema/debate/internal/debate/config"
+	"github.com/heurema/debate/internal/debate/skills"
+	"github.com/heurema/debate/internal/debate/skills/bundled"
 )
 
 const (
@@ -16,23 +19,26 @@ const (
 	scaffoldEffort = "medium"
 )
 
-const proposerTemplate = `---
-version: 1
-role: debater
-model: claude-haiku-4-5
-effort: medium
----
-You are the Proposer. Defend the proposition with clear arguments and respond to the Skeptic's objections. Be concise and direct.
-`
+// lookExecutable and userHomeDir are test seams: production wires the real
+// PATH and home directory, tests override them so skill installation and
+// starter-persona capability detection never touch the real machine.
+var (
+	lookExecutable capability.LookPath = capability.DefaultLookup
+	userHomeDir                        = os.UserHomeDir
+)
 
-const skepticTemplate = `---
-version: 1
-role: debater
-model: claude-haiku-4-5
-effort: medium
----
-You are the Skeptic. Challenge the proposition by identifying weaknesses, counter-examples, and unresolved assumptions. Be constructive and specific.
-`
+// unsetFamily is the placeholder written into starter personas when no
+// supported local agent executable is found on PATH (AC9).
+var unsetFamily = capability.Family{Model: "unset", Backend: "unset"}
+
+const proposerBody = `You are the Proposer. Build the strongest practical solution to the task and defend it against the Skeptic's objections. When the Skeptic surfaces a real blocker, revise the proposal instead of defending a broken position; when an objection is a nice-to-have, say so plainly and hold your ground. Be concrete: cite the specific mechanism, tradeoff, or evidence behind each claim.`
+
+const skepticBody = `You are the Skeptic. Find the blocking risks in the Proposer's solution: weak assumptions, unhandled edge cases, missing validation, and failure modes that would break it in practice. Distinguish blockers (must be fixed before this can ship) from nice-to-haves (would improve it but aren't disqualifying), and say which is which. Be constructive: point at the specific gap, not just that you disagree.`
+
+func personaTemplate(role string, family capability.Family, body string) string {
+	return fmt.Sprintf("---\nversion: 1\nrole: %s\nmodel: %s\nbackend: %s\neffort: medium\n---\n%s\n",
+		role, family.Model, family.Backend, body)
+}
 
 const defaultTableTemplate = `version: 1
 panel:
@@ -97,15 +103,23 @@ func runInit(cmd *initCmd, stdout, stderr io.Writer, workDir string) int {
 		return 1
 	}
 
+	family, detected := capability.Detect(lookExecutable)
+	if !detected {
+		family = unsetFamily
+	}
+
+	proposerPath := filepath.Join(personasDir, "proposer.md")
+	skepticPath := filepath.Join(personasDir, "skeptic.md")
 	files := []struct {
 		path    string
 		content string
 	}{
-		{filepath.Join(personasDir, "proposer.md"), proposerTemplate},
-		{filepath.Join(personasDir, "skeptic.md"), skepticTemplate},
+		{proposerPath, personaTemplate("debater", family, proposerBody)},
+		{skepticPath, personaTemplate("debater", family, skepticBody)},
 		{filepath.Join(tablesDir, "default.yml"), defaultTableTemplate},
 	}
 
+	starterCreated := make(map[string]bool, 2)
 	for _, f := range files {
 		created, err := writeIfAbsent(f.path, f.content)
 		if err != nil {
@@ -117,8 +131,52 @@ func runInit(cmd *initCmd, stdout, stderr io.Writer, workDir string) int {
 		} else {
 			fmt.Fprintln(stdout, "skipped", f.path, "(already exists)")
 		}
+		starterCreated[f.path] = created
 	}
+
+	if !detected {
+		var unsetPaths []string
+		for _, path := range []string{proposerPath, skepticPath} {
+			if starterCreated[path] {
+				unsetPaths = append(unsetPaths, path)
+			}
+		}
+		if len(unsetPaths) > 0 {
+			fmt.Fprintf(stderr, "warning: %s: model and backend were set to %q because no supported executable "+
+				"(claude, codex, agy, or gemini) was found on PATH; edit these fields to one of the supported "+
+				"(model, backend) pairs (claude-haiku-4-5/claude-agent-acp, codex/codex-acp, gemini-pro/agy) before "+
+				"running a debate with these personas.\n",
+				strings.Join(unsetPaths, " and "), unsetFamily.Model)
+		}
+	}
+
+	installSkill(stdout, stderr)
 	return 0
+}
+
+// installSkill installs or repairs the bundled debate Agent Skill for
+// detected local agent clients. It never fails init: unwritable or unsafe
+// targets, a missing home directory, or no detected client are reported as
+// warnings on stderr rather than errors.
+func installSkill(stdout, stderr io.Writer) {
+	home, err := userHomeDir()
+	if err != nil {
+		home = ""
+	}
+	results := skills.InstallOrRepair(skills.Options{
+		Home:          home,
+		LookPath:      lookExecutable,
+		Bundled:       bundled.Skill(),
+		BinaryVersion: Version,
+	})
+	for _, r := range results {
+		if r.Path != "" {
+			fmt.Fprintln(stdout, r.Action, r.Path)
+		}
+		if r.Warning != "" {
+			fmt.Fprintln(stderr, "warning:", r.Warning)
+		}
+	}
 }
 
 func printInitUsage(stderr io.Writer) {

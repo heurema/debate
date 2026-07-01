@@ -187,7 +187,9 @@ The project-local workspace is discovered by walking upward from the current dir
     └── default.yml
 ```
 
-`debate init` creates `.heurema/debate/personas/proposer.md`, `.heurema/debate/personas/skeptic.md`, and `.heurema/debate/tables/default.yml`. It writes into the current directory and does not overwrite existing files.
+`debate init` creates `.heurema/debate/personas/proposer.md`, `.heurema/debate/personas/skeptic.md`, and `.heurema/debate/tables/default.yml`. It writes into the current directory and does not overwrite existing files. It creates no `context.md`, no synthesizer persona, and no project-local Agent Skill directory — project-local debate state stays scoped to `.heurema/debate`.
+
+Starter persona `model`/`backend` defaults are capability-aware, using the same detection precedence as the built-in synthesizer fallback (§7): an executable named `claude` on `PATH` wins, then `codex`, then `agy` or `gemini`. If none is found, `proposer.md` and `skeptic.md` are still created with the literal placeholder `unset` for both fields — syntactically valid but non-functional — and `init` writes one stderr warning naming both files and instructing the user to edit them before running a debate.
 
 Persona discovery loads Markdown files from exactly these shapes:
 
@@ -263,6 +265,27 @@ debate "Pick the safest migration path" --with proposer,skeptic
 
 Otherwise panel resolution uses `--table <name>` or `tables/default.yml`. Naming a synthesizer-role persona or the same resolved persona more than once in a panel fails before any backend session opens.
 
+## 6a. Global Agent Skill Installation
+
+`debate init` installs or repairs one bundled [Agent Skill](https://code.claude.com/docs/en/skills) named `debate`, targeting the user's home directory rather than the project. This is global setup, separate from the `.heurema/debate` scaffold above, and only `init` performs it — `debate new`, `debate version`, and ordinary `debate` runs never write global skill state. There is no `debate skills` (or similarly named) subcommand in v1; re-running `init` is the install/repair path.
+
+The bundled skill lives in the repository under `internal/debate/skills/bundled/debate/` (a directory named `debate`, satisfying the Agent Skills naming contract) and is embedded into the binary at build time, so installation needs no network access or external registry.
+
+Target selection is detection-driven:
+
+- `~/.agents/skills/debate` — the standard Agent Skills path, installed when `codex` or `gemini` is found on `PATH`, or `~/.agents` already exists.
+- `~/.claude/skills/debate` — a Claude Code compatibility copy, installed when `claude` is found on `PATH`, or `~/.claude` already exists.
+
+Both targets install independently; detecting both Codex and Gemini still yields exactly one standard target (no per-client duplicate copies), and no `~/.codex/skills` or `~/.gemini/skills` directory is created in v1. Existing `~/.agents` or `~/.claude` directories are treated as sufficient evidence for these *targets* but never choose the *runtime* (model, backend) defaults in §6 or §7 — those require an executable on `PATH`.
+
+Each managed install carries a `.debate-skill.json` metadata file (schema marker, debate binary version, one managed content checksum, and target/source info) alongside the skill content, excluded from the checksum itself. The checksum is SHA-256 over each file's relative path and content, sorted by path, hashed once — computed identically for on-disk installed content and for the bundled content, so the two are directly comparable. Install/repair is a two-step comparison:
+
+1. If the target is absent, create it and record the bundled checksum as managed.
+2. If present with recognizable managed metadata, compare the on-disk checksum to the recorded one. A mismatch means local edits — preserve the target and warn, without inspecting the bundled content at all.
+3. Only when on-disk content still matches the recorded checksum does init compare the *bundled* checksum against it: equal means current (no-op); different means the bundled skill changed since install, so init overwrites the target with the new content and refreshes the recorded checksum.
+
+A target that exists without recognizable debate-managed metadata is treated as unmanaged and preserved with a warning, the same as a locally-modified managed target. Target paths are derived only from the detected home directory and the two fixed roots above — no user-supplied path is accepted — and the installer refuses to write through a symlinked target or intermediate directory, skipping it with a warning instead. None of this affects `debate init`'s exit code: skill-install failures, missing `HOME`, or no detected client are reported as warnings on stderr, while stdout keeps reporting created/skipped workspace files and created/updated/current/skipped skill installs.
+
 ## 7. Synthesizer
 
 The synthesizer produces the final answer from the transcript. It does not participate in the debate panel.
@@ -274,7 +297,13 @@ Resolution order:
 3. uniquely resolved selector `synthesizer`
 4. built-in default synthesizer
 
-The built-in default uses `claude-haiku-4-5` with low effort and a neutral synthesis prompt. A custom synthesizer persona is only needed when the project wants a different model, backend, or synthesis style. Synthesizer resolution rejects debater-role personas.
+The built-in default is capability-aware rather than hard-coded to one model. It resolves a (model, backend) pair with low effort and a neutral synthesis prompt as follows:
+
+1. If every panel persona shares one supported backend family (all `claude-agent-acp`, all `codex-acp`, or all `agy`), reuse that family.
+2. Otherwise, detect the first supported local runtime on `PATH`, checked in order: `claude` (`claude-haiku-4-5` / `claude-agent-acp`), then `codex` (`codex` / `codex-acp`), then `agy` or `gemini` (`gemini-pro` / `agy`).
+3. If neither resolves, the run fails before opening any session with an actionable error rather than silently assuming Claude is installed.
+
+This is the same detection precedence `debate init` uses for starter persona defaults (see §6a) — both are driven by executable-on-`PATH` presence only, never by home-directory evidence. A custom synthesizer persona is only needed when the project wants a different model, backend, or synthesis style. Synthesizer resolution rejects debater-role personas.
 
 ## 8. Task Input
 
@@ -417,6 +446,8 @@ The CLI validates workspace shape and persona config before the first model call
 - Backend inference comes from model name, with `backend` as an escape hatch.
 - Synthesizer is product policy, not engine policy.
 - `context.md` is not part of the workspace contract.
+- Exactly one bundled Agent Skill (`debate`) ships in v1; no `debate skills` or similar subcommand exists, and only `debate init` installs or repairs it globally.
+- Runtime model/backend defaults (starter personas and the built-in synthesizer fallback) are capability-aware via executable-on-`PATH` detection, not hard-coded to Claude.
 
 ## 12. Future Work
 

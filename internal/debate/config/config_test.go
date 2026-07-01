@@ -1,14 +1,31 @@
 package config_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/heurema/debate/internal/debate/capability"
 	"github.com/heurema/debate/internal/debate/config"
 	"github.com/heurema/debate/internal/debate/persona"
 )
+
+// fakeLookPath simulates which executables are on PATH without touching the
+// real environment. Used to make capability.Detect deterministic in tests.
+func fakeLookPath(found ...string) capability.LookPath {
+	set := make(map[string]bool, len(found))
+	for _, f := range found {
+		set[f] = true
+	}
+	return func(name string) (string, error) {
+		if set[name] {
+			return "/usr/bin/" + name, nil
+		}
+		return "", errors.New("not found")
+	}
+}
 
 func makeDebateDir(t *testing.T, files map[string]string) string {
 	t.Helper()
@@ -540,6 +557,101 @@ func TestLoad_MissingDebateDir(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), ".heurema/debate") {
 		t.Errorf("error should mention .heurema/debate: %v", err)
+	}
+}
+
+const codexPersona = `---
+version: 1
+model: codex
+effort: medium
+---
+You are Codex, a pragmatic implementer.
+`
+
+const geminiPersona = `---
+version: 1
+model: gemini-pro
+effort: medium
+---
+You are Gemini, an alternative perspective.
+`
+
+func TestLoad_DefaultSynthesizerHomogeneousNonClaudePanel(t *testing.T) {
+	root := makeDebateDir(t, map[string]string{
+		"personas/alice.md":  codexPersona,
+		"personas/bob.md":    codexPersona,
+		"tables/default.yml": defaultTable,
+	})
+	// No supported executable on PATH; homogeneous codex panel must still
+	// resolve without consulting capability.Detect.
+	orig := config.LookPath
+	config.LookPath = fakeLookPath()
+	defer func() { config.LookPath = orig }()
+
+	ws, err := config.Load(root, "", nil, "")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if ws.Synthesizer.Model != "codex" || ws.Synthesizer.Backend != "codex-acp" {
+		t.Errorf("Synthesizer = %+v, want model codex backend codex-acp", ws.Synthesizer)
+	}
+}
+
+func TestLoad_DefaultSynthesizerMixedPanelFallsBackToDetection(t *testing.T) {
+	root := makeDebateDir(t, map[string]string{
+		"personas/alice.md":  alicePersona, // claude-agent-acp
+		"personas/bob.md":    codexPersona, // codex-acp: mixed panel
+		"tables/default.yml": defaultTable,
+	})
+	orig := config.LookPath
+	config.LookPath = fakeLookPath("codex")
+	defer func() { config.LookPath = orig }()
+
+	ws, err := config.Load(root, "", nil, "")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if ws.Synthesizer.Model != "codex" || ws.Synthesizer.Backend != "codex-acp" {
+		t.Errorf("Synthesizer = %+v, want detection fallback to codex", ws.Synthesizer)
+	}
+}
+
+func TestLoad_DefaultSynthesizerNoSupportedBackendFailsActionably(t *testing.T) {
+	root := makeDebateDir(t, map[string]string{
+		"personas/alice.md":  alicePersona,
+		"personas/bob.md":    codexPersona, // mixed panel forces detection fallback
+		"tables/default.yml": defaultTable,
+	})
+	orig := config.LookPath
+	config.LookPath = fakeLookPath() // nothing detected
+	defer func() { config.LookPath = orig }()
+
+	_, err := config.Load(root, "", nil, "")
+	if err == nil {
+		t.Fatal("expected error when no supported backend is detected and panel is mixed")
+	}
+	for _, want := range []string{"--synth", "table synth", "synthesizer persona", "backend/model"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q missing actionable hint %q", err.Error(), want)
+		}
+	}
+}
+
+func TestLoad_DefaultSynthesizerGeminiHomogeneousPanel(t *testing.T) {
+	root := makeDebateDir(t, map[string]string{
+		"personas/alice.md":  geminiPersona,
+		"tables/default.yml": "version: 1\npanel:\n  - alice\n",
+	})
+	orig := config.LookPath
+	config.LookPath = fakeLookPath()
+	defer func() { config.LookPath = orig }()
+
+	ws, err := config.Load(root, "", nil, "")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if ws.Synthesizer.Model != "gemini-pro" || ws.Synthesizer.Backend != "agy" {
+		t.Errorf("Synthesizer = %+v, want model gemini-pro backend agy", ws.Synthesizer)
 	}
 }
 
